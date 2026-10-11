@@ -1,27 +1,47 @@
 extends Node2D
-## Prozedurale Straße (Belt-Scroller) - PoC der Render-Kette.
+## Prozedurale Straße (Belt-Scroller) - Nachbau von shadegunner/render/.
 ##
-## Alles wird pro Frame mit _draw() gezeichnet (wie QPainter in der
-## Python-Version). Der Dither-Shader macht daraus danach 16 Farben.
+## Schichten von hinten nach vorn: Himmel, ferne Stadt (Fenster + Türme),
+## Ladenzeile am Horizont mit Neonschildern, Straße mit nassen Reflexionen,
+## Figuren (Sprites), Vordergrund-Masten, Regen.
 
 const W := Config.RENDER_W
 const H := Config.RENDER_H
 
 const NEON := [Palette.CYAN, Palette.MAGENTA, Palette.AMBER, Palette.VIOLET,
-	Palette.TEAL, Palette.WHITE, Palette.BLUE, Palette.SODIUM]
-const SIGNS := [Palette.CYAN, Palette.MAGENTA, Palette.AMBER, Palette.VIOLET]
-const BODIES := [Palette.NAVY, Palette.INDIGO, Palette.NIGHT, Palette.STEEL,
-	Palette.CRIMSON, Palette.SODIUM, Palette.MAGENTA, Palette.VIOLET]
+	Palette.TEAL, Palette.PALE, Palette.BLUE, Palette.SODIUM]
+
+# Grundtöne (aus dem Original gemessen: Szene liegt bei ca. 50-80 pro Kanal)
+const SKY_BASE := Color8(52, 54, 74)
+const TOWER := Color8(28, 32, 50)
+const ROAD_BASE := Color8(44, 50, 74)
+const ROAD_LANE := Color8(56, 64, 92)
+
+# Parallax-Maßstäbe (Bildschirmpixel pro Welt-Einheit) je Schicht
+const PPU_FAR := 0.20
+const PPU_MID := 0.44
+const PPU_SHOP := 0.90
 
 var t := 0.0
 var cam_x := 0.0
 var rng := RandomNumberGenerator.new()
 var length := 6000.0
+var sprites := Sprites.new()
 
-var far_windows: Array = []
-var buildings: Array = []
+var towers: Array = []
+var windows: Array = []
+var shops: Array = []
 var actors: Array = []
+var poles: Array = []
 var player: Dictionary = {}
+
+
+func _col(i: int) -> Color:
+	return Palette.NOIR16[i]
+
+
+func _layer_x(x: float, ppu: float) -> float:
+	return W * 0.5 + (x - cam_x) * ppu
 
 
 func _ready() -> void:
@@ -29,67 +49,76 @@ func _ready() -> void:
 	_generate()
 
 
-func _col(i: int) -> Color:
-	return Palette.NOIR16[i]
-
-
-func _neon() -> Color:
-	return _col(NEON[rng.randi_range(0, NEON.size() - 1)])
-
-
 func _generate() -> void:
-	# Ferne Stadt: dichte Fensterwand oben (Parallaxe je Fenster)
-	for _i in 260:
-		far_windows.append({
-			"x": rng.randf_range(0.0, 1.0),
-			"y": rng.randf_range(0.02, 0.49),
-			"w": rng.randf_range(1.5, 4.0),
-			"h": rng.randf_range(1.5, 5.0),
-			"c": _neon(),
-			"p": rng.randf_range(0.03, 0.16),
+	# Ferne Türme: Silhouetten mit Fensterrastern
+	var x := -600.0
+	while x < length:
+		var bw := rng.randf_range(120.0, 300.0)
+		var bh := rng.randf_range(60.0, 155.0)
+		var wins: Array = []
+		var wy := 6.0
+		while wy < bh - 8.0:
+			var wxx := 5.0
+			while wxx < bw - 8.0:
+				if rng.randf() < 0.55:
+					wins.append({"dx": wxx, "y": wy, "c": _col(NEON[rng.randi_range(0, NEON.size() - 1)])})
+				wxx += rng.randf_range(7.0, 13.0)
+			wy += rng.randf_range(7.0, 12.0)
+		towers.append({"x": x, "w": bw, "h": bh, "win": wins})
+		x += bw + rng.randf_range(4.0, 22.0)
+
+	# lose Fensterpunkte weit hinten (dichte Wand)
+	for _i in 520:
+		windows.append({
+			"x": rng.randf_range(0.0, 1.0), "y": rng.randf_range(0.0, 0.47),
+			"w": rng.randf_range(1.8, 4.5), "h": rng.randf_range(1.8, 5.0),
+			"c": _col(NEON[rng.randi_range(0, NEON.size() - 1)]),
+			"p": rng.randf_range(0.03, 0.12),
 		})
 
-	# Fassaden: Ladenzeile am Horizont mit Schildern
-	var x := 0.0
+	# Läden am Horizont: Schaufenster + Neonschild
+	x = -300.0
 	while x < length:
-		var bw := rng.randf_range(120.0, 260.0)
-		var bh := rng.randf_range(22.0, 78.0)
-		var b := {"x": x, "w": bw, "h": bh, "win": [], "signs": []}
-		var wx := x + 6.0
-		while wx < x + bw - 8.0:
-			var wy := 4.0
-			while wy < bh - 10.0:
-				if rng.randf() < 0.5:
-					b["win"].append({"dx": wx - x, "y": wy, "c": _neon()})
-				wy += rng.randf_range(9.0, 15.0)
-			wx += rng.randf_range(9.0, 17.0)
-		var nsign := rng.randi_range(0, 2)
-		for _s in nsign:
-			b["signs"].append({
-				"dx": rng.randf_range(6.0, maxf(8.0, bw - 46.0)),
-				"y": rng.randf_range(bh * 0.25, maxf(bh * 0.3, bh - 8.0)),
-				"w": rng.randf_range(22.0, 48.0),
-				"c": _col(SIGNS[rng.randi_range(0, SIGNS.size() - 1)]),
-			})
-		buildings.append(b)
-		x += bw + rng.randf_range(2.0, 14.0)
-
-	# Passanten
-	for _i in 44:
-		actors.append(_make_actor(rng.randf_range(0.05, length * 0.9)))
+		var sw := rng.randf_range(60.0, 130.0)
+		shops.append({
+			"x": x, "w": sw,
+			"lit": Color8(246, 249, 253) if rng.randf() < 0.5 else Color8(255, 158, 70),
+			"sign": _col([Palette.CYAN, Palette.MAGENTA, Palette.AMBER, Palette.VIOLET][rng.randi_range(0, 3)]),
+			"sign_w": rng.randf_range(20.0, 44.0), "sign_off": rng.randf_range(4.0, maxf(6.0, sw - 30.0)),
+			"h": rng.randf_range(26.0, 36.0),
+			"blink": rng.randf() < 0.25, "seed": rng.randi_range(0, 999),
+		})
+		x += sw + rng.randf_range(6.0, 26.0)
 
 	player = {"x": length * 0.3, "depth": 0.62}
 
+	# Passanten: rund um die Kamera (recyceln, wenn sie aus dem Bild laufen)
+	for i in 60:
+		actors.append(_make_actor(float(player["x"]) + rng.randf_range(-460.0, 900.0), i))
 
-func _make_actor(px: float) -> Dictionary:
+	# Vordergrund-Masten
+	x = -100.0
+	while x < length:
+		poles.append({"x": x, "w": rng.randf_range(7.0, 14.0)})
+		x += rng.randf_range(340.0, 640.0)
+
+
+func _make_actor(px: float, i: int) -> Dictionary:
+	var anim := "walk"
+	var r := rng.randf()
+	if r < 0.18:
+		anim = "idle"
+	elif r < 0.32:
+		anim = "talk"
+	var d := rng.randf_range(0.03, 1.0)
+	if rng.randf() < 0.12:
+		d = rng.randf_range(0.98, 1.12)   # ganz nah an der Kamera
 	return {
-		"x": px,
-		"depth": rng.randf_range(0.06, 0.96),
+		"x": px, "depth": d,
 		"dir": 1.0 if rng.randf() < 0.5 else -1.0,
-		"speed": rng.randf_range(14.0, 30.0),
-		"body": _col(BODIES[rng.randi_range(0, BODIES.size() - 1)]),
-		"head": _col(Palette.ASH if rng.randf() < 0.6 else Palette.PALE),
-		"walk": rng.randf_range(0.0, 10.0),
+		"speed": rng.randf_range(12.0, 28.0),
+		"look": Sprites.random_look(rng, i), "anim": anim,
+		"phase": rng.randf(),
 	}
 
 
@@ -102,79 +131,82 @@ func _process(delta: float) -> void:
 
 	for a in actors:
 		a["x"] = float(a["x"]) + float(a["dir"]) * float(a["speed"]) * delta
-		a["walk"] = float(a["walk"]) + delta * 6.0
+		a["phase"] = fmod(float(a["phase"]) + delta * (0.9 if a["anim"] == "walk" else 0.25), 1.0)
 		if float(a["x"]) < cam_x - 420.0:
 			a["x"] = cam_x + 900.0
-			a["depth"] = rng.randf_range(0.06, 0.96)
+			a["depth"] = rng.randf_range(0.03, 1.0)
 		elif float(a["x"]) > cam_x + 900.0:
 			a["x"] = cam_x - 400.0
-			a["depth"] = rng.randf_range(0.06, 0.96)
+			a["depth"] = rng.randf_range(0.03, 1.0)
 
 	queue_redraw()
 
 
 func _draw() -> void:
-	draw_rect(Rect2(0, 0, W, H), _col(Palette.VOID))
+	draw_rect(Rect2(0, 0, W, H), SKY_BASE)
 	_draw_far_city()
-	_draw_facade()
+	_draw_shops()
 	_draw_ground()
-	_draw_rain()
 	_draw_actors()
+	_draw_poles()
+	_draw_rain()
 
 
 func _draw_far_city() -> void:
-	for fw in far_windows:
-		var sx: float = fposmod(float(fw["x"]) * W - cam_x * float(fw["p"]) * 6.0, float(W))
-		var y: float = float(fw["y"]) * H
-		var c: Color = fw["c"]
-		c.a = 0.75
-		draw_rect(Rect2(sx, y, float(fw["w"]), float(fw["h"])), c)
-
-
-func _draw_facade() -> void:
 	var base_y: float = Persp.ground_y(Config.FACADE_DEPTH)
-	var ppu: float = Persp.ppu(Config.FACADE_DEPTH)
-	var c_night := _col(Palette.NIGHT)
-	var c_ind := _col(Palette.INDIGO)
-	var c_void := _col(Palette.VOID)
-	for b in buildings:
-		var sx: float = Persp.screen_x(float(b["x"]), Config.FACADE_DEPTH, cam_x)
-		var sw: float = float(b["w"]) * ppu
+	var c_night := TOWER
+	for b in towers:
+		var sx: float = _layer_x(float(b["x"]), PPU_FAR)
+		var sw: float = float(b["w"]) * PPU_FAR
 		if sx > W or sx + sw < 0.0:
 			continue
-		var top: float = base_y - float(b["h"])
-		draw_rect(Rect2(sx, top, sw, float(b["h"])), c_night)
-		draw_rect(Rect2(sx, top, sw, 1.5), c_ind)
-		for wnode in b["win"]:
-			var wx: float = sx + float(wnode["dx"]) * ppu
-			if wx < -4.0 or wx > W + 4.0:
+		var top := base_y - float(b["h"]) * PPU_FAR * 2.4
+		draw_rect(Rect2(sx, top, sw, base_y - top), c_night)
+		for wn in b["win"]:
+			var wx: float = sx + float(wn["dx"]) * PPU_FAR
+			if wx < 0.0 or wx > W:
 				continue
-			draw_rect(Rect2(wx, top + float(wnode["y"]), 2.0, 2.6), wnode["c"])
-		for sg in b["signs"]:
-			var gx: float = sx + float(sg["dx"]) * ppu
-			if gx < -60.0 or gx > W + 60.0:
-				continue
-			var gw: float = float(sg["w"]) * ppu
-			var gy: float = top + float(sg["y"])
-			draw_rect(Rect2(gx - 1.5, gy - 1.5, gw + 3.0, 8.0), c_void)
-			draw_rect(Rect2(gx, gy, gw, 5.0), sg["c"])
+			draw_rect(Rect2(wx, top + float(wn["y"]) * PPU_FAR * 2.0, 1.6, 2.2), wn["c"])
+	for fw in windows:
+		var fx: float = fposmod(float(fw["x"]) * W - cam_x * float(fw["p"]), float(W))
+		draw_rect(Rect2(fx, float(fw["y"]) * H, float(fw["w"]), float(fw["h"])), fw["c"])
+	var haze := _col(Palette.INDIGO)
+	haze.a = 0.12
+	draw_rect(Rect2(0, base_y - 150.0, W, 150.0), haze)
+
+
+func _draw_shops() -> void:
+	var base_y: float = Persp.ground_y(0.0)
+	var c_frame := _col(Palette.VOID)
+	for s in shops:
+		var sx: float = _layer_x(float(s["x"]), PPU_SHOP)
+		var sw: float = float(s["w"]) * PPU_SHOP
+		if sx > W or sx + sw < 0.0:
+			continue
+		var bh: float = float(s["h"])
+		# Schaufenster mit dunklem Rahmen und Fuge
+		draw_rect(Rect2(sx, base_y - bh, sw, bh), c_frame)
+		draw_rect(Rect2(sx + 1.5, base_y - bh + 1.5, sw - 3.0, bh - 3.0), s["lit"])
+		# Neonschild darüber
+		var lit: bool = (not s["blink"]) or (int(t * 6.0 + float(s["seed"])) % 7 != 0)
+		if lit:
+			var gx: float = sx + float(s["sign_off"]) * PPU_SHOP
+			var gw: float = float(s["sign_w"]) * PPU_SHOP
+			draw_rect(Rect2(gx - 2.0, base_y - bh - 11.0, gw + 4.0, 9.0), c_frame)
+			draw_rect(Rect2(gx, base_y - bh - 9.0, gw, 5.0), s["sign"])
+	var glow := _col(Palette.AMBER)
+	glow.a = 0.30
+	draw_rect(Rect2(0, base_y - 1.5, W, 3.0), glow)
 
 
 func _draw_ground() -> void:
 	var y0: float = Persp.ground_y(0.0)
-	draw_rect(Rect2(0, y0, W, H - y0), _col(Palette.NAVY))
-	draw_rect(Rect2(0, y0 - 10.0, W, 10.0), _col(Palette.INDIGO))
-
-	# Fahrspuren (horizontal, Belt-Scroller)
+	draw_rect(Rect2(0, y0, W, H - y0), ROAD_BASE)
 	for lane in Config.LANES:
 		var ld: float = lane.x
 		var ty: float = Persp.ground_y(ld - Config.LANE_HALF)
 		var by: float = Persp.ground_y(ld + Config.LANE_HALF)
-		var c := _col(Palette.INDIGO)
-		c.a = 0.55
-		draw_rect(Rect2(0, ty, W, by - ty), c)
-
-	# Mittelstreifen: gestrichelt, scrollt mit
+		draw_rect(Rect2(0, ty, W, by - ty), ROAD_LANE)
 	var md := 0.53
 	var my: float = Persp.ground_y(md)
 	var ppu: float = Persp.ppu(md)
@@ -183,61 +215,56 @@ func _draw_ground() -> void:
 	var first: float = floor((cam_x - span * 0.5) / dash) * dash
 	var px: float = first
 	while px < cam_x + span * 0.5:
-		var sx: float = Persp.screen_x(px, md, cam_x)
-		draw_rect(Rect2(sx, my - 0.8, dash * ppu * 0.5, 1.6), _col(Palette.ASH))
+		draw_rect(Rect2(Persp.screen_x(px, md, cam_x), my - 0.8, dash * ppu * 0.5, 1.6), _col(Palette.ASH))
 		px += dash
-
-	# Nasse Reflexionen: senkrechte Neon-Schlieren
-	for i in 7:
-		var rx: float = fposmod(i * 97.0 - cam_x * 0.12, float(W))
-		var c2 := _col(NEON[(i * 3) % NEON.size()])
-		c2.a = 0.12
-		draw_rect(Rect2(rx, y0, 6.0, H - y0), c2)
-
-
-func _draw_rain() -> void:
-	var c := _col(Palette.STEEL)
-	c.a = 0.5
-	var scroll: float = fposmod(cam_x * 0.4, 200.0)
-	for i in 90:
-		var x: float = fposmod(i * 71.0 - scroll, float(W))
-		var y: float = fposmod(i * 137.0 + t * 260.0, float(H))
-		draw_line(Vector2(x, y), Vector2(x - 2.5, y + 9.0), c, 1.0)
+	# nasse Reflexionen: senkrechte Neon-Schlieren, nach unten dünner
+	for i in 18:
+		var rx: float = fposmod(i * 79.0 - cam_x * 0.9, float(W))
+		var c2 := _col(NEON[(i * 5) % NEON.size()])
+		c2.a = 0.12 + (i % 3) * 0.05
+		draw_rect(Rect2(rx, y0, 5.0 + (i % 4) * 2.0, H - y0), c2)
 
 
 func _draw_actors() -> void:
 	var list := actors.duplicate()
 	list.append({"x": player["x"], "depth": player["depth"], "dir": 1.0, "speed": 0.0,
-		"body": _col(Palette.CYAN), "head": _col(Palette.PALE), "walk": t * 8.0, "player": true})
+		"look": Sprites.player_look(), "anim": "walk", "phase": fmod(t * 0.9, 1.0)})
 	list.sort_custom(func(a, b): return float(a["depth"]) < float(b["depth"]))
 	for a in list:
 		_draw_figure(a)
 
 
 func _draw_figure(a: Dictionary) -> void:
-	var sx: float = Persp.screen_x(float(a["x"]), float(a["depth"]), cam_x)
-	if sx < -40.0 or sx > W + 40.0:
+	var depth: float = a["depth"]
+	var sx: float = Persp.screen_x(float(a["x"]), depth, cam_x)
+	if sx < -60.0 or sx > W + 60.0:
 		return
-	var gy: float = Persp.ground_y(float(a["depth"]))
-	var h: float = Persp.figure_h(float(a["depth"]))
-	var w := h * 0.34
-	var is_player: bool = a.get("player", false)
-	var walk: float = float(a["walk"])
-	var leg: float = abs(sin(walk)) * h * 0.08
-
-	# Schatten
+	var gy: float = Persp.ground_y(depth)
+	var look: Dictionary = a["look"]
+	var hpx: float = Persp.figure_h(depth) * float(look["hf"])
 	var sh := _col(Palette.VOID)
 	sh.a = 0.5
-	draw_rect(Rect2(sx - w * 0.6, gy - 1.5, w * 1.2, 2.5), sh)
+	var sw := hpx * 0.28
+	draw_rect(Rect2(sx - sw, gy - 1.2, sw * 2.0, 2.2), sh)
+	var fog := clampf((0.55 - depth) * 1.1, 0.0, 0.5)
+	sprites.draw_figure(self, Vector2(sx, gy), look, a["anim"], float(a["phase"]),
+		hpx, int(a["dir"]), _col(Palette.NAVY), fog)
 
-	var body: Color = a["body"]
-	draw_rect(Rect2(sx - w * 0.34, gy - h * 0.42, w * 0.28, h * 0.42), body.darkened(0.25))
-	draw_rect(Rect2(sx + w * 0.06, gy - h * 0.42 - leg, w * 0.28, h * 0.42 + leg), body.darkened(0.25))
-	draw_rect(Rect2(sx - w * 0.5, gy - h * 0.82, w, h * 0.42), body)
-	draw_circle(Vector2(sx, gy - h * 0.9), h * 0.12, a["head"])
 
-	var rim := _col(Palette.CYAN if is_player else Palette.BLUE)
-	rim.a = 0.9
-	draw_rect(Rect2(sx + w * 0.45, gy - h * 0.82, 1.0, h * 0.42), rim)
-	if is_player:
-		draw_rect(Rect2(sx - w * 0.5, gy - h * 0.9, w, 1.5), _col(Palette.WHITE))
+func _draw_poles() -> void:
+	var c := Color(5.0 / 255.0, 6.0 / 255.0, 10.0 / 255.0)
+	for p in poles:
+		var sx: float = _layer_x(float(p["x"]), 1.30)
+		if sx < -20.0 or sx > W + 20.0:
+			continue
+		draw_rect(Rect2(sx, 0, float(p["w"]), H), c)
+
+
+func _draw_rain() -> void:
+	var c := _col(Palette.STEEL)
+	c.a = 0.4
+	var scroll: float = fposmod(cam_x * 0.4, 200.0)
+	for i in 70:
+		var x: float = fposmod(i * 71.0 - scroll, float(W))
+		var y: float = fposmod(i * 137.0 + t * 260.0, float(H))
+		draw_line(Vector2(x, y), Vector2(x - 2.5, y + 9.0), c, 1.0)

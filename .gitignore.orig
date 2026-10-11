@@ -1,0 +1,13 @@
+# Godot 4
+.godot/
+/build/
+*.apk
+*.aab
+
+# Schlüssel und Export-Geheimnisse
+*.keystore
+*.jks
+
+# Sonstiges
+.DS_Store
+shots/

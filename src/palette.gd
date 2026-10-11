@@ -34,7 +34,8 @@ static func get_color(i: int) -> Color:
 
 
 static func v3() -> PackedVector3Array:
-	## Palettte als vec3-Array (0..1) fuer den Shader.
+	## Palette als vec3-Array (0..1). Der Shader hat sie derzeit fest eingebettet,
+	## diese Funktion bleibt fuer Debug-Ausgaben.
 	var a := PackedVector3Array()
 	for c in NOIR16:
 		a.push_back(Vector3(c.r, c.g, c.b))

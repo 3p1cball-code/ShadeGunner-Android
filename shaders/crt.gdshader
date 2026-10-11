@@ -6,14 +6,14 @@ shader_type canvas_item;
 
 uniform float curve = 0.06;
 uniform float corner = 0.03;
-uniform float mask_amt = 0.22;
+uniform float mask_amt = 0.14;
 uniform float mask_px = 1.0;
-uniform float scan = 0.30;
+uniform float scan = 0.16;
 uniform float scan_period = 3.0;     // Bildschirmpixel pro Scanline-Periode
-uniform float bloom_amt = 0.70;
-uniform float grain = 0.035;
+uniform float bloom_amt = 1.10;
+uniform float grain = 0.030;
 uniform float hum = 0.02;
-uniform float vignette = 0.40;
+uniform float vignette = 0.22;
 uniform float aberr = 1.5;
 uniform vec2 screen_size = vec2(1280.0, 720.0);
 uniform float aspect = 1.777778;
@@ -22,6 +22,14 @@ float hash21(vec2 p) {
 	p = fract(p * vec2(123.34, 345.45));
 	p += dot(p, p + 34.345);
 	return fract(p.x * p.y);
+}
+
+// Die SubViewport-Textur kommt beim Abtasten in einem linearen Raum an. Der
+// Exponent ist gegen die Python-Referenz kalibriert (sample -> Szene), damit
+// Grading und Palette wieder im sRGB-Raum arbeiten.
+uniform float tex_gain = 1.0;
+vec3 decode_tex(vec3 c) {
+	return clamp(c * tex_gain, 0.0, 1.0);
 }
 
 void fragment() {
@@ -43,10 +51,10 @@ void fragment() {
 		// Quelle im Wölbungsraum
 		vec2 suv = ns * 0.5 + 0.5;
 		vec2 ab = ns * (0.25 + 0.75 * dot(ns, ns)) * aberr / screen_size;
-		vec3 col = vec3(
+		vec3 col = decode_tex(vec3(
 			texture(TEXTURE, suv + ab).r,
 			texture(TEXTURE, suv).g,
-			texture(TEXTURE, suv - ab).b);
+			texture(TEXTURE, suv - ab).b));
 
 		float lum = dot(col, vec3(0.299, 0.587, 0.114));
 
@@ -62,14 +70,16 @@ void fragment() {
 
 		// Bloom: acht Taps im Kreis, nur die hellen Anteile
 		if (bloom_amt > 0.001) {
-			float rad = 3.0 / screen_size.y;
 			vec3 acc = vec3(0.0);
-			for (int i = 0; i < 8; i++) {
-				float a = float(i) * 0.785398;
-				acc += texture(TEXTURE, suv + vec2(cos(a), sin(a)) * rad).rgb;
+			for (int i = 0; i < 12; i++) {
+				float a = float(i) * 0.523599;
+				float r1 = 4.0 / screen_size.y;
+				float r2 = 9.0 / screen_size.y;
+				acc += decode_tex(texture(TEXTURE, suv + vec2(cos(a), sin(a)) * r1).rgb) * 0.5;
+				acc += decode_tex(texture(TEXTURE, suv + vec2(cos(a), sin(a)) * r2).rgb) * 0.5;
 			}
-			acc /= 8.0;
-			col += max(acc - vec3(0.45), vec3(0.0)) * bloom_amt;
+			acc /= 12.0;
+			col += max(acc - vec3(0.35), vec3(0.0)) * bloom_amt;
 		}
 
 		// Überstrahlen zurück in den Bereich
