@@ -33,6 +33,7 @@ var windows: Array = []
 var shops: Array = []
 var actors: Array = []
 var poles: Array = []
+var vehicles: Array = []
 var player: Dictionary = {}
 
 
@@ -80,17 +81,26 @@ func _generate() -> void:
 	x = -300.0
 	while x < length:
 		var sw := rng.randf_range(60.0, 130.0)
+		var cols := maxi(3, int(sw / 13.0))
+		var cells := []
+		for _c in cols:
+			cells.append(0.0 if rng.randf() < 0.16 else rng.randf_range(0.55, 1.0))
 		shops.append({
 			"x": x, "w": sw,
 			"lit": Color8(246, 249, 253) if rng.randf() < 0.5 else Color8(255, 158, 70),
 			"sign": _col([Palette.CYAN, Palette.MAGENTA, Palette.AMBER, Palette.VIOLET][rng.randi_range(0, 3)]),
 			"sign_w": rng.randf_range(20.0, 44.0), "sign_off": rng.randf_range(4.0, maxf(6.0, sw - 30.0)),
-			"h": rng.randf_range(26.0, 36.0),
+			"h": rng.randf_range(15.0, 21.0), "cells": cells,
 			"blink": rng.randf() < 0.25, "seed": rng.randi_range(0, 999),
 		})
 		x += sw + rng.randf_range(6.0, 26.0)
 
 	player = {"x": length * 0.3, "depth": 0.62}
+
+	# Fahrzeuge auf den Spuren
+	for i in 12:
+		var lane: Vector2 = Config.LANES[i % Config.LANES.size()]
+		vehicles.append(_make_vehicle(float(player["x"]) + rng.randf_range(-700.0, 900.0), lane))
 
 	# Passanten: rund um die Kamera (recyceln, wenn sie aus dem Bild laufen)
 	for i in 60:
@@ -101,6 +111,15 @@ func _generate() -> void:
 	while x < length:
 		poles.append({"x": x, "w": rng.randf_range(7.0, 14.0)})
 		x += rng.randf_range(340.0, 640.0)
+
+
+func _make_vehicle(px: float, lane: Vector2) -> Dictionary:
+	var col := _col([Palette.NAVY, Palette.INDIGO, Palette.STEEL, Palette.SODIUM][rng.randi_range(0, 3)])
+	return {
+		"x": px, "depth": lane.x, "dir": lane.y,
+		"speed": rng.randf_range(26.0, 54.0),
+		"body": col, "len": rng.randf_range(26.0, 52.0), "big": rng.randf() < 0.3,
+	}
 
 
 func _make_actor(px: float, i: int) -> Dictionary:
@@ -139,6 +158,13 @@ func _process(delta: float) -> void:
 			a["x"] = cam_x - 400.0
 			a["depth"] = rng.randf_range(0.03, 1.0)
 
+	for v in vehicles:
+		v["x"] = float(v["x"]) + float(v["dir"]) * float(v["speed"]) * delta
+		if float(v["x"]) < cam_x - 700.0:
+			v["x"] = cam_x + 900.0
+		elif float(v["x"]) > cam_x + 900.0:
+			v["x"] = cam_x - 700.0
+
 	queue_redraw()
 
 
@@ -147,6 +173,7 @@ func _draw() -> void:
 	_draw_far_city()
 	_draw_shops()
 	_draw_ground()
+	_draw_vehicles()
 	_draw_actors()
 	_draw_poles()
 	_draw_rain()
@@ -173,6 +200,13 @@ func _draw_far_city() -> void:
 	var haze := _col(Palette.INDIGO)
 	haze.a = 0.12
 	draw_rect(Rect2(0, base_y - 150.0, W, 150.0), haze)
+	# Himmelsverlauf: nach oben dunkler
+	for i in 10:
+		var gf := float(i) / 9.0
+		var top := base_y * (1.0 - gf)
+		var cb := _col(Palette.NIGHT)
+		cb.a = 0.16 * (1.0 - gf) * (1.0 - gf)
+		draw_rect(Rect2(0, top - base_y * 0.1, W, base_y * 0.1 + 1.0), cb)
 
 
 func _draw_shops() -> void:
@@ -184,9 +218,16 @@ func _draw_shops() -> void:
 		if sx > W or sx + sw < 0.0:
 			continue
 		var bh: float = float(s["h"])
-		# Schaufenster mit dunklem Rahmen und Fuge
+		# Schaufenster mit dunklem Rahmen, zerlegt in ein Fenstergitter
 		draw_rect(Rect2(sx, base_y - bh, sw, bh), c_frame)
-		draw_rect(Rect2(sx + 1.5, base_y - bh + 1.5, sw - 3.0, bh - 3.0), s["lit"])
+		var cells: Array = s["cells"]
+		var cwid := sw / float(cells.size())
+		for j in cells.size():
+			var br: float = cells[j]
+			if br <= 0.0:
+				continue
+			var cx := sx + j * cwid + 1.5
+			draw_rect(Rect2(cx, base_y - bh + 2.0, cwid - 3.0, bh - 4.0), (s["lit"] as Color) * br)
 		# Neonschild darüber
 		var lit: bool = (not s["blink"]) or (int(t * 6.0 + float(s["seed"])) % 7 != 0)
 		if lit:
@@ -217,12 +258,49 @@ func _draw_ground() -> void:
 	while px < cam_x + span * 0.5:
 		draw_rect(Rect2(Persp.screen_x(px, md, cam_x), my - 0.8, dash * ppu * 0.5, 1.6), _col(Palette.ASH))
 		px += dash
+	# Pfuetzen: kurze, helle Neon-Flecken auf nasser Fahrbahn
+	for i in 9:
+		var px2: float = fposmod(i * 131.0 - cam_x * 0.85, float(W))
+		var pd: float = 0.30 + (i % 5) * 0.14
+		var py2: float = Persp.ground_y(pd)
+		var c3 := _col(NEON[(i * 3) % NEON.size()])
+		c3.a = 0.35
+		draw_rect(Rect2(px2, py2, 14.0 + (i % 4) * 6.0, 2.0), c3)
+
 	# nasse Reflexionen: senkrechte Neon-Schlieren, nach unten dünner
-	for i in 18:
-		var rx: float = fposmod(i * 79.0 - cam_x * 0.9, float(W))
+	for i in 14:
+		var rx: float = fposmod(i * 97.0 - cam_x * 0.9, float(W))
 		var c2 := _col(NEON[(i * 5) % NEON.size()])
-		c2.a = 0.12 + (i % 3) * 0.05
-		draw_rect(Rect2(rx, y0, 5.0 + (i % 4) * 2.0, H - y0), c2)
+		c2.a = 0.07 + (i % 3) * 0.035
+		draw_rect(Rect2(rx, y0, 8.0 + (i % 4) * 3.0, H - y0), c2)
+
+
+func _draw_vehicles() -> void:
+	for v in vehicles:
+		var sx: float = Persp.screen_x(float(v["x"]), float(v["depth"]), cam_x)
+		var ppu: float = Persp.ppu(float(v["depth"]))
+		var ln: float = float(v["len"]) * ppu
+		if sx < -ln or sx > W + ln:
+			continue
+		var gy: float = Persp.ground_y(float(v["depth"]))
+		var hgt: float = (5.2 if v["big"] else 3.6) * ppu
+		var w2: float = ln * 0.5
+		var body: Color = v["body"]
+		var xd: float = 1.0 if float(v["dir"]) > 0.0 else -1.0
+		# Schatten
+		var sh := _col(Palette.VOID)
+		sh.a = 0.45
+		draw_rect(Rect2(sx - w2, gy - 1.0, 2.0 * w2, 2.0), sh)
+		# Kabine (Windschutzscheibe in Fahrtrichtung) + Karosserie
+		draw_rect(Rect2(sx - w2 * 0.5, gy - hgt * 2.0, w2, hgt * 0.9), body.darkened(0.25))
+		draw_rect(Rect2(sx - w2 * 0.35, gy - hgt * 1.9, w2 * 0.7, hgt * 0.6), _col(Palette.INDIGO))
+		draw_rect(Rect2(sx - w2, gy - hgt * 1.35, 2.0 * w2, hgt * 1.35), body)
+		# Raeder
+		draw_rect(Rect2(sx - w2 * 0.75, gy - hgt * 0.35, w2 * 0.35, hgt * 0.35), _col(Palette.VOID))
+		draw_rect(Rect2(sx + w2 * 0.4, gy - hgt * 0.35, w2 * 0.35, hgt * 0.35), _col(Palette.VOID))
+		# Leuchten hinten, Suchlicht vorn
+		draw_rect(Rect2(sx - xd * w2 - 1.0, gy - hgt * 0.9, 2.0, 2.0), _col(Palette.MAGENTA))
+		draw_rect(Rect2(sx + xd * w2 - 1.0, gy - hgt * 0.9, 2.0, 2.0), _col(Palette.AMBER))
 
 
 func _draw_actors() -> void:

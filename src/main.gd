@@ -93,6 +93,10 @@ func _parse_args() -> void:
 			_crt_over = a.substr(6)
 		elif a.begins_with("--flat="):
 			_flat = a.substr(7)
+		elif a.begins_with("--win="):
+			var wh := a.substr(6).split("x")
+			if wh.size() == 2:
+				DisplayServer.window_set_size(Vector2i(int(wh[0]), int(wh[1])))
 		elif a.begins_with("--dump-scene="):
 			_dump_scene = a.substr(13)
 
