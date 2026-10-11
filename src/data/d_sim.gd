@@ -1,0 +1,193 @@
+class_name DSim
+extends RefCounted
+## AUTOMATISCH ERZEUGT aus shadegunner.sim (tools/export_data.py) - nicht von Hand ändern.
+
+const BOUNTY_NAMES = ["HODGE", "LEON", "ZHORA", "PRIS", "ROY"]
+const COATS = [
+	[[44, 52, 86], "dunkelblau"],
+	[[66, 80, 124], "blau"],
+	[[78, 80, 94], "grau"],
+	[[126, 32, 58], "rot"],
+	[[34, 96, 106], "türkis"],
+	[[100, 66, 150], "violett"],
+	[[96, 120, 166], "hellblau"],
+	[[24, 24, 32], "schwarz"],
+	[[196, 150, 52], "gelb"],
+	[[196, 200, 208], "weiß"],
+	[[196, 70, 140], "pink"],
+	[[200, 104, 44], "orange"],
+]
+const DU = 160.0
+const ORDER = ["gait", "anachron", "pupils", "stimulus", "serial"]
+const ORIGAMI = [
+	["huhn", "HUHN"],
+	["mann", "STREICHHOLZMANN"],
+	["schaf", "SCHAF"],
+	["kranich", "KRANICH"],
+	["einhorn", "EINHORN"],
+]
+const PLAYER_LOOK = {
+	"id": -1,
+	"outfit": "trench",
+	"head": "short",
+	"umbrella": null,
+	"wf": 1.06,
+	"hf": 1.03,
+	"coat": [150, 146, 140],
+	"coat_name": "beige",
+	"pants": [34, 38, 56],
+	"skin": [206, 176, 158],
+	"hair": [40, 30, 30],
+	"accent": [64, 210, 220],
+	"bag": null,
+	"collar": true,
+	"player": true,
+	"cig": false,
+	"led": false,
+	"mask": false,
+	"old": false,
+}
+const SHOUT_LINES = ["LAPD! ALLE RUNTER!", "POLIZEI! KÖPFE RUNTER!", "BLADE RUNNER! IN DECKUNG!", "RUNTER! SOFORT!"]
+const STRONG_TELLS = ["pupils", "stimulus", "serial"]
+const TALK_ANSWERS = [
+	"ICH HAB NICHTS GETAN!",
+	"WAS WOLLEN SIE?",
+	"NICHT SCHIESSEN!",
+	"ICH WOHN HIER!",
+	"BIN NUR AUF DEM HEIMWEG",
+	"HAB MEINEN AUSWEIS NICHT DABEI",
+	"OKAY, OKAY!",
+]
+const TALK_LINES = ["SIE DA! STEHEN BLEIBEN!", "HALT! POLIZEI!", "HEY! SIE! HÄNDE HOCH!", "KEINE BEWEGUNG!"]
+const TELLS = {
+	"pupils": [0.6, 0.05, true, "PUPILLE"],
+	"stimulus": [0.55, 0.06, true, "REIZ"],
+	"serial": [0.7, 0.01, true, "SERIE"],
+	"gait": [0.45, 0.1, false, "GANG"],
+	"anachron": [0.35, 0.07, false, "DETAIL"],
+}
+const TELL_ORDER = ["gait", "anachron", "pupils", "stimulus", "serial"]
+const UPGRADES = [
+	["akku", "SCAN-AKKU", "+2 SCAN-LADUNGEN"],
+	["schnell", "SCHNELLSCAN", "SCANS 45% KÜRZER"],
+	["tief", "TIEFENSCAN", "SCAN ZEIGT ALLE TELLS, SERIE AUF DISTANZ"],
+	["auge", "FELDBLICK", "BEOBACHTUNG DOPPELT SO SCHNELL"],
+	["weste", "PANZERWESTE", "+1 INTEGRITÄT, VOLL GEHEILT"],
+	["sprint", "LAUFSCHUHE", "+20% TEMPO"],
+	["hand", "RUHIGE HAND", "SOFORT SCHIESSEN, KEINE ZIELZEIT"],
+	["kalt", "KALTES BLUT", "FEHLER KOSTEN 35% WENIGER VERDACHT"],
+	["peil", "PEILSENDER", "FLÜCHTENDE SIND 30% LANGSAMER"],
+	["instinkt", "INSTINKT", "AUGENREFLEXE DOPPELT SO HÄUFIG"],
+	["megafon", "MEGAFON", "RUF ALLE 6 S STATT 12, 35% WEITER"],
+]
+const VEHICLES = {
+	"car": [87.0, 29.0, 170.0],
+	"taxi": [84.0, 40.0, 185.0],
+	"truck": [138.0, 48.0, 135.0],
+	"bike": [45.0, 36.0, 230.0],
+	"police": [90.0, 31.0, 215.0],
+	"limo": [126.0, 26.5, 160.0],
+	"bus": [180.0, 56.0, 120.0],
+}
+const WEAK_TELLS = ["gait", "anachron"]
+const ZONES = [
+	{
+		"name": "Außenbezirk",
+		"length": 2000,
+		"density": 1.7,
+		"sidewalk": 0.8,
+		"groups": 0.22,
+		"replicants": 5,
+		"quota": 3,
+		"camo": 0.0,
+		"aggression": 0.0,
+		"flee": 0.45,
+		"traffic": 12.0,
+		"parked": 1.5,
+		"steam": 1.0,
+		"patrol": null,
+		"blackout": 0.0,
+	},
+	{
+		"name": "Vorstadt",
+		"length": 2300,
+		"density": 2.0,
+		"sidewalk": 1.0,
+		"groups": 0.3,
+		"replicants": 6,
+		"quota": 3,
+		"camo": 0.25,
+		"aggression": 0.15,
+		"flee": 0.5,
+		"traffic": 5.0,
+		"parked": 3.0,
+		"steam": 1.6,
+		"patrol": 55.0,
+		"blackout": 0.5,
+	},
+	{
+		"name": "Innenstadt",
+		"length": 2600,
+		"density": 2.5,
+		"sidewalk": 1.4,
+		"groups": 0.38,
+		"replicants": 8,
+		"quota": 4,
+		"camo": 0.5,
+		"aggression": 0.3,
+		"flee": 0.55,
+		"traffic": 2.4,
+		"parked": 5.5,
+		"steam": 2.6,
+		"patrol": 40.0,
+		"blackout": 0.6,
+	},
+	{
+		"name": "Hafen",
+		"length": 2400,
+		"density": 2.1,
+		"sidewalk": 1.1,
+		"groups": 0.32,
+		"replicants": 8,
+		"quota": 5,
+		"camo": 0.7,
+		"aggression": 0.5,
+		"flee": 0.6,
+		"traffic": 2.1,
+		"parked": 6.5,
+		"steam": 3.0,
+		"patrol": 45.0,
+		"blackout": 0.8,
+	},
+	{
+		"name": "Tyrell",
+		"length": 2300,
+		"density": 2.3,
+		"sidewalk": 1.2,
+		"groups": 0.26,
+		"replicants": 9,
+		"quota": 5,
+		"camo": 0.9,
+		"aggression": 0.65,
+		"flee": 0.6,
+		"traffic": 1.8,
+		"parked": 7.0,
+		"steam": 3.2,
+		"patrol": 30.0,
+		"blackout": 0.5,
+	},
+]
+const ZONE_PARKED = [
+	["truck", "car", "car"],
+	["car", "car", "taxi", "bike", "car"],
+	["taxi", "car", "car", "bike", "taxi", "bus"],
+	["truck", "truck", "car", "car", "bike"],
+	["limo", "car", "limo", "police"],
+]
+const ZONE_TRAFFIC = [
+	["truck", "car", "car", "bike"],
+	["car", "car", "taxi", "bike", "police", "bus"],
+	["taxi", "taxi", "car", "bike", "police", "car", "bus"],
+	["truck", "truck", "car", "bike", "bus"],
+	["limo", "police", "car", "limo"],
+]

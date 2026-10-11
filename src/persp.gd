@@ -4,6 +4,14 @@ class_name Persp
 ## Tiefe d: 0 = hintere Bordsteinkante, 1 = vorne. Skala und Bild-y sind beide
 ## linear in d - exakt eine Zentralperspektive mit Horizont bei horizon_px().
 
+const W := Config.RENDER_W
+const H := Config.RENDER_H
+const _Y0 := Config.FLOOR_TOP_Y * Config.RENDER_H
+const _Y1 := Config.FLOOR_BOTTOM_Y * Config.RENDER_H
+const PPU_NEAR := float(Config.RENDER_W) / Config.VIEW_SPAN_NEAR
+const FACADE_Y := _Y0 + (_Y1 - _Y0) * Config.FACADE_DEPTH
+const FACADE_PPU := PPU_NEAR * (Config.SCALE_FAR + (1.0 - Config.SCALE_FAR) * Config.FACADE_DEPTH)
+
 static func scale(d: float) -> float:
 	return Config.SCALE_FAR + (1.0 - Config.SCALE_FAR) * d
 
