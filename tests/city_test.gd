@@ -60,7 +60,7 @@ func _ready() -> void:
 				"puddles": c.puddles.size()},
 			"far": [c.far.lmin, c.far.width], "mid": [c.mid.lmin, c.mid.width],
 			"gate": c.gate, "exit_L": c.exit_L, "g_wmin": c.g_wmin, "ground_y0": c.ground_y0,
-			"holo_kinds": kinds, "rng": c.rng.random()}
+			"holo_kinds": kinds, "rng": c._rng.random()}
 	print("City x5: %d ms" % (Time.get_ticks_msec() - t0))
 	var r := PyRandom.new(5)
 	var s1 := City._make_sign(r, City.CYAN, "vertical")
