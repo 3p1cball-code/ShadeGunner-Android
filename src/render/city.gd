@@ -10,7 +10,7 @@ extends RefCounted
 ## von render/scene gezeichnet.
 ##
 ## Port-Hinweise:
-##   QImage + QPainter        -> City.baker.bake(w, h, func(p: QP): ...)
+##   QImage + QPainter        -> City._bake(w, h, func(p: QP): ...)
 ##   setPixelColor-Bilder     -> City._Pix (CPU, premultipliziert) -> ImageTexture -> QImg
 ##   Layer / Sign / Lamp      -> innere Klassen City.Layer / City.Sign / City.Lamp
 ##   self.seed                -> seed_
@@ -69,6 +69,29 @@ static func qc(c: Array, a: float = 255.0) -> Color:
 	return QP.rgb(c, a)
 
 
+## Wie Baker.bake, aber mit QPExact (Pixelmitten-Regel wie Qt aliased; QPs
+## +0.5-Versatz stimmt nur für ganzzahlige Koordinaten - Wolken/Nebel/Pyramiden
+## liegen gebrochen). Der Viewport hängt am Baker (release/release_all wirken).
+static func _bake(w: int, h: int, draw: Callable) -> QImg:
+	var vp := SubViewport.new()
+	vp.size = Vector2i(maxi(1, w), maxi(1, h))
+	vp.transparent_bg = true
+	vp.disable_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ONCE
+	var host := Node2D.new()
+	vp.add_child(host)
+	baker.add_child(vp)
+	var p := QPExact.new(host.get_canvas_item())
+	p.begin()
+	draw.call(p)
+	p.end()
+	baker._bakes.append(vp)
+	var img := QImg.new(vp.get_texture(), Rect2(0, 0, w, h))
+	img.set_meta("vp", vp)
+	return img
+
+
 ## Nasse-Straße-Reflexion, progressiv: am Kontaktpunkt (oben im gespiegelten Bild)
 ## fast scharf und kräftig, mit zunehmender Tiefe immer weicher und blasser.
 ## Aus mehreren Blur-Stufen zu EINEM Bild gebacken.
@@ -79,7 +102,7 @@ static func soft_reflection(img: QImg) -> QImg:
 	var h := img.height()
 	if w < 2 or h < 2:
 		return img
-	var mir := baker.bake(w, h, func(p: QP) -> void:
+	var mir := _bake(w, h, func(p: QP) -> void:
 		p.translate(0, h)
 		p.scale(1.0, -1.0)
 		p.draw_image(Rect2(0, 0, w, h), img))
@@ -89,10 +112,10 @@ static func soft_reflection(img: QImg) -> QImg:
 		var wf: int = hw[1]
 		var sw := maxi(1, Py.ifloordiv(w, wf))
 		var sh := maxi(1, Py.ifloordiv(h, hf))
-		var small := baker.bake(sw, sh, func(p: QP) -> void:
+		var small := _bake(sw, sh, func(p: QP) -> void:
 			p.set_smooth(true)
 			p.draw_image(Rect2(0, 0, sw, sh), mir))
-		var big := baker.bake(w, h, func(p: QP) -> void:
+		var big := _bake(w, h, func(p: QP) -> void:
 			p.set_smooth(true)
 			p.draw_image(Rect2(0, 0, w, h), small))
 		layers.append(big)
@@ -104,7 +127,7 @@ static func soft_reflection(img: QImg) -> QImg:
 		var e: float = st[2]
 		var a: float = st[3]
 		var src: QImg = layers[idx]
-		var tmp := baker.bake(w, h, func(t: QP) -> void:
+		var tmp := _bake(w, h, func(t: QP) -> void:
 			t.draw_image_at(0, 0, src)
 			t.set_mode(QP.DEST_IN)
 			var grad := QGrad.linear(0, 0, 0, h)
@@ -115,7 +138,7 @@ static func soft_reflection(img: QImg) -> QImg:
 			grad.set_color_at(1.0, QP.c(255, 255, 255, 0))
 			t.fill_rect(0, 0, w, h, grad))
 		tmps.append(tmp)
-	return baker.bake(w, h, func(op: QP) -> void:
+	return _bake(w, h, func(op: QP) -> void:
 		for t: QImg in tmps:
 			op.draw_image_at(0, 0, t))
 
@@ -249,7 +272,7 @@ class Layer:
 		width = int((cam_max - cam_min) * factor + City.W + 80)
 		height = height_
 		y = y_
-		img = null    # wird vom Erzeuger gebacken (City.baker.bake(width, height, ...))
+		img = null    # wird vom Erzeuger gebacken (City._bake(width, height, ...))
 
 	## Layer-Koordinate -> Bildpixel.
 	func lx(L: float) -> float:
@@ -566,7 +589,7 @@ func _cloud_bank() -> void:
 	var w := W * 3
 	var h := 260
 	var col := mix(mix(th["fog"], th["sky_hor"], 0.5), PALE, 0.28)
-	bank = baker.bake(w, h, func(p: QP) -> void:
+	bank = _bake(w, h, func(p: QP) -> void:
 		p.set_no_pen()
 		for _i in 46:
 			var cx := rng.uniform(0, w)
@@ -593,7 +616,7 @@ func _cloud_tile() -> void:
 	var h := 172
 	var col := mix(mix(th["fog"], th["sky_hor"], 0.45), PALE, 0.36)
 	var r2 := PyRandom.new(4242)
-	cloud = baker.bake(w, h, func(p: QP) -> void:
+	cloud = _bake(w, h, func(p: QP) -> void:
 		p.set_no_pen()
 		for _i in 8:
 			var cx := r2.uniform(w * 0.22, w * 0.78)
@@ -623,7 +646,7 @@ func _fog_tex() -> void:
 		var rmax: float = spec[4]
 		var w := W * 2
 		var col := mix(mix(th["fog"], th["sky_hor"], 0.45), PALE, 0.2)
-		var img := baker.bake(w, h, func(p: QP) -> void:
+		var img := _bake(w, h, func(p: QP) -> void:
 			p.set_no_pen()
 			for _i in n:
 				var cx := rng.uniform(0, w)
@@ -665,7 +688,7 @@ func _air() -> void:
 
 # ---------------------------------------------------------------- Himmel
 func _sky() -> void:
-	sky = baker.bake(W, fy + 4, func(p: QP) -> void:
+	sky = _bake(W, fy + 4, func(p: QP) -> void:
 		var g := QGrad.linear(0, 0, 0, fy)
 		g.set_color_at(0.0, qc(th["sky_top"]))
 		g.set_color_at(0.55, qc(th["sky_mid"]))
@@ -681,7 +704,7 @@ func _clouds() -> void:
 		var y1: float = specs[li][1]
 		var a: float = specs[li][2]
 		var cw := W * 2
-		var img := baker.bake(cw, 150, func(p: QP) -> void:
+		var img := _bake(cw, 150, func(p: QP) -> void:
 			p.set_no_pen()
 			for _i in 90:
 				var cx := rng.uniform(0, cw)
@@ -704,7 +727,7 @@ func _far() -> void:
 	var far_h: Array = th["far_h"]
 	var win: Array = th["win"]
 	var lit_f: float = th["lit"]
-	lay.img = baker.bake(lay.width, lay.height, func(p: QP) -> void:
+	lay.img = _bake(lay.width, lay.height, func(p: QP) -> void:
 		var x := 0
 		while x < lay.width:
 			var bw := rng.randint(14, 46)
@@ -777,7 +800,7 @@ func _mid() -> void:
 	var win: Array = th["win"]
 	var lit_f: float = th["lit"]
 	var n_bb: int = th["billboards"]
-	lay.img = baker.bake(lay.width, lay.height, func(p: QP) -> void:
+	lay.img = _bake(lay.width, lay.height, func(p: QP) -> void:
 		var x := 0
 		var tops: Array = []
 		while x < lay.width:
