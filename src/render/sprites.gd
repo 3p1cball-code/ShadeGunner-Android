@@ -20,8 +20,7 @@ extends RefCounted
 ##   # meta = {eye, hand, head: Vector2 (relativ zum Fußpunkt, px), head_top: float}
 ##   p.draw_image_at(x - r[2], y - r[3], r[0])
 ## Ein Cache-Fehlschlag backt sofort; das Bild ist im selben Frame gültig.
-## Abweichungen von QP (gegen Qt gemessen): Formen per Pixelmitte (_SP), dünne
-## Stifte mit Cosmetic-Deckkraft (_pen) und Qt-Pixelwahl (_qt_line_cells).
+## Gezeichnet wird mit QPExact (Qt-genaue Rasterregeln, src/render/qp_exact.gd).
 
 const PI_ := DSprites.PI
 const ANIMS := DSprites.ANIMS
@@ -38,46 +37,7 @@ static var baker: Baker
 static var atlas_size := 2048
 
 static var _CACHE := {}
-static var _gens: Array = []          # zwei _Gen im Wechsel (voll -> andere leeren, alte bleibt im Frame gültig)
-static var _cur := 0
-static var _drawn := 0                # gezählte RenderingServer.frame_post_draw
-static var _dummy: QP                 # schluckt Leuchtteile, wenn kein emit gebraucht wird
-static var _dummy_root := RID()
-static var _fx_pool: Array[RID] = []
-static var _mats := {}                # m -> ShaderMaterial
-## Versatz der Formen im Zielraum (s. _SP); veränderbar für Tests.
-static var shape_eps := 1.0 / 128.0
-
-
-## QP mit Qt-Abtastregel für Formen: Qt füllt aliased jedes Pixel, dessen Mitte
-## in (x0, x1] liegt. Die GPU füllt [x0, x1) - ein winziger Versatz +eps gleicht
-## das an. (QP._gx versetzt um +0.5 px; das stimmt nur für ganzzahlige Koordinaten.)
-class _SP extends QP:
-	func _gx() -> Transform2D:
-		return Transform2D(xf.x, xf.y, xf.origin + Vector2(Sprites.shape_eps, Sprites.shape_eps))
-
-
-## Ein Atlas-Paar: raw (rohe Figur + emit) und fin (fertiges Bild, liest raw).
-## Eigene Buchführung statt Atlas.frame_start: Godot setzt render_target_update_mode
-## nach UPDATE_ONCE nicht auf DISABLED zurück, frame_start gibt daher nie frei und
-## jedes commit() würde alle alten Painter erneut zeichnen.
-class _Gen:
-	var raw: Baker.Atlas
-	var fin: Baker.Atlas
-	var painters: Array = []          # QP, bis zum Render des Atlas
-	var fx: Array[RID] = []           # Postprocess-Items, bis zum Render des Atlas
-	var commit_drawn := -1            # Sprites._drawn beim commit (-1 = nichts offen)
-	var draw_index := 0
-
-
-## Wie Baker.Atlas.painter_for, aber mit _SP und eigener Freigabeliste.
-static func _painter_for(g: _Gen, r: Rect2i) -> QP:
-	var p := _SP.new(g.raw.host.get_canvas_item())
-	p.begin()
-	p.set_clip_rect(r.position.x, r.position.y, r.size.x, r.size.y)
-	p.translate(r.position.x, r.position.y)
-	g.painters.append(p)
-	return p
+static var _cache_obj: ExactCache     # Atlanten + Freigabe (src/render/exact_cache.gd)
 
 
 static func _mul(c: Array, f: float) -> Array:
@@ -196,11 +156,6 @@ static func _limb(origin: Vector2, a: float, l: float) -> Vector2:
 # ---------------------------------------------------------------------------- Zeichnen
 
 static func _pen(p: QP, col: Array, w: float, alpha: float = 255.0) -> void:
-	# Qt zeichnet Stifte <= 1 Gerätepixel mit dem Cosmetic-Stroker und Deckkraft
-	# int(256 * Breite * Skala) / 256 (QCosmeticStroker::setup); QP nicht -> hier nachbilden.
-	var spx := w * sqrt(absf(p.transform().determinant()))
-	if w > 0.0 and spx <= 1.0:
-		alpha = alpha * clampi(int(256.0 * spx), 0, 256) / 256.0
 	p.set_pen(QP.rgb(col, alpha), w, QP.CAP_ROUND)
 
 
@@ -225,85 +180,7 @@ static func _pa(pts: Array) -> PackedVector2Array:
 
 
 static func _line(p: QP, a: Vector2, b: Vector2) -> void:
-	var xf := p.transform()
-	if not p.pen_on or p.pen_w * sqrt(absf(xf.determinant())) > 1.0:
-		p.draw_line(a.x, a.y, b.x, b.y)
-		return
-	_cells(p, _qt_line_cells(xf * a, xf * b))
-
-
-static func _area(pts: PackedVector2Array) -> float:
-	var a := 0.0
-	for i in pts.size():
-		var q := pts[(i + 1) % pts.size()]
-		a += pts[i].x * q.y - q.x * pts[i].y
-	return a * 0.5
-
-
-## Pixel einzeln im Zielraum füllen (Farbe des Stifts).
-static func _cells(p: QP, cells: Array[Vector2i]) -> void:
-	var col := p.pen_col
-	p.save()
-	p.reset_transform()
-	for c in cells:
-		p.fill_rect(c.x, c.y, 1, 1, col)
-	p.restore()
-
-
-## Pixelmenge einer dünnen Linie wie QCosmeticStroker (aliased, mit Kappen):
-## Endpunkte 26.6-Festkomma (trunkiert), Steigung 16.16, capAdjust um ein halbes
-## Pixel, Querachse an der Pixelmitte nur bei positiver Steigung. Gegen Qt
-## geprüft (400 Zufallslinien, 0 Abweichungen).
-static func _qt_line_cells(a: Vector2, b: Vector2) -> Array[Vector2i]:
-	var x1 := int(a.x * 64.0)
-	var y1 := int(a.y * 64.0)
-	var x2 := int(b.x * 64.0)
-	var y2 := int(b.y * 64.0)
-	var out: Array[Vector2i] = []
-	if absi(x2 - x1) < absi(y2 - y1):
-		if y1 > y2:
-			var tx := x1
-			var ty := y1
-			x1 = x2
-			y1 = y2
-			x2 = tx
-			y2 = ty
-		var inc := ((x2 - x1) << 16) / (y2 - y1)
-		var x := x1 << 10
-		y1 -= 32
-		x -= inc >> 1
-		y2 += 32
-		var y := (y1 + 32) >> 6
-		var ys := (y2 + 32) >> 6
-		x += (((y << 6) + (32 if inc > 0 else 0) - y1) * inc) >> 6
-		while y < ys:
-			out.append(Vector2i(x >> 16, y))
-			x += inc
-			y += 1
-	else:
-		if x1 > x2:
-			var tx := x1
-			var ty := y1
-			x1 = x2
-			y1 = y2
-			x2 = tx
-			y2 = ty
-		if x2 == x1:
-			out.append(Vector2i(x1 >> 6, y1 >> 6))
-			return out
-		var inc := ((y2 - y1) << 16) / (x2 - x1)
-		var yy := y1 << 10
-		x1 -= 32
-		yy -= inc >> 1
-		x2 += 32
-		var x := (x1 + 32) >> 6
-		var xs := (x2 + 32) >> 6
-		yy += (((x << 6) + (32 if inc > 0 else 0) - x1) * inc) >> 6
-		while x < xs:
-			out.append(Vector2i(x, yy >> 16))
-			yy += inc
-			x += 1
-	return out
+	p.draw_line(a.x, a.y, b.x, b.y)
 
 
 static func _point(p: QP, a: Vector2) -> void:
@@ -627,66 +504,9 @@ static func _draw_head(p: QP, emit: QP, look: Dictionary, P: Dictionary, hc: Vec
 	return eye
 
 
-## drawPolyline. Dünne Stifte: Qt zeichnet den Pfad am Stück (jedes Pixel einmal);
-## QP strichelt Segmente einzeln und deckt Stoßpixel doppelt -> Pixelmenge selbst bilden.
+## drawPolyline (QPExact zeichnet dünne/halbtransparente Pfade wie Qt am Stück).
 static func _polyline(p: QP, pts: PackedVector2Array) -> void:
-	var xf := p.transform()
-	if pts.size() < 2:
-		return
-	var spx := sqrt(absf(xf.determinant()))
-	if p.pen_w * spx > 1.0:
-		if p.pen_col.a >= 1.0:
-			p.draw_polyline(pts)
-			return
-		# Halbtransparent: Qt füllt den Strich-Umriss (Segmente + runde Stöße) einmal
-		var hw := p.pen_w * 0.5
-		var n := clampi(int(hw * spx * 3.0), 8, 32)
-		var done: Array[PackedVector2Array] = []
-		var fills: Array[PackedVector2Array] = []
-		for i in pts.size():
-			var parts: Array[PackedVector2Array] = []
-			var circ := PackedVector2Array()
-			for j in n:
-				circ.append(pts[i] + Vector2(cos(TAU * j / n), sin(TAU * j / n)) * hw)
-			parts.append(circ)
-			if i > 0:
-				var d := pts[i] - pts[i - 1]
-				if d.length() > 0.0001:
-					var nr := Vector2(-d.y, d.x).normalized() * hw
-					parts.append(PackedVector2Array([pts[i - 1] + nr, pts[i] + nr, pts[i] - nr, pts[i - 1] - nr]))
-			for part in parts:
-				# nur der noch nicht bedeckte Rest des Teils wird gefüllt
-				var pieces: Array[PackedVector2Array] = [part]
-				for old in done:
-					var nxt: Array[PackedVector2Array] = []
-					for pc in pieces:
-						var res := Geometry2D.clip_polygons(pc, old)
-						for r: PackedVector2Array in res:
-							var hole := false
-							for o: PackedVector2Array in res:
-								if o != r and Geometry2D.is_point_in_polygon(r[0], o):
-									hole = true
-							if not hole:
-								nxt.append(r)
-					pieces = nxt
-				fills.append_array(pieces)
-				done.append(part)
-		var col := p.pen_col
-		p.save()
-		p.set_no_pen()
-		p.set_brush(col)
-		for f in fills:
-			p.draw_polygon(f)
-		p.restore()
-		return
-	var seen := {}
-	var cells: Array[Vector2i] = []
-	for i in range(1, pts.size()):
-		for c in _qt_line_cells(xf * pts[i - 1], xf * pts[i]):
-			if not seen.has(c):
-				seen[c] = true
-				cells.append(c)
-	_cells(p, cells)
+	p.draw_polyline(pts)
 
 
 static func _umbrella(p: QP, emit: QP, look: Dictionary, hc: Vector2) -> void:
@@ -751,128 +571,25 @@ static func _fallen_umbrella(p: QP, emit: QP, look: Dictionary) -> void:
 
 # ---------------------------------------------------------------------------- Cache / API
 
-# Postprocess-Shader: rgb = tex.rgb * m * vc.a + vc.rgb * tex.a, a = tex.a * vc.a
-#   Maske (SourceIn):  m = 0, vc = (Farbe * alpha, alpha)  (premultipliziert)
-#   Figur mit Nebel:   m = 1 - f, vc = (fog * f, 1)
-# Der Nebel (SourceAtop über das Gesamtbild) ist linear in (rgb, a) und verteilt sich
-# deshalb exakt auf jede einzelne Ebene.
-const _FX_SHADER := "shader_type canvas_item;\nrender_mode blend_premul_alpha;\nuniform float m;\nvarying vec4 vc;\nvoid vertex(){ vc = COLOR; }\nvoid fragment(){ vec4 t = texture(TEXTURE, UV); COLOR = vec4(t.rgb * m * vc.a + vc.rgb * t.a, t.a * vc.a); }"
+static func _ec() -> ExactCache:
+	if _cache_obj == null:
+		_cache_obj = ExactCache.new(_CACHE)
+		_cache_obj.atlas_size = atlas_size
+	_cache_obj.ensure(baker)
+	return _cache_obj
 
 
-static func _mat(m: float) -> ShaderMaterial:
-	var hit: Variant = _mats.get(m)
-	if hit != null:
-		return hit
-	var sh := Shader.new()
-	sh.code = _FX_SHADER
-	var mat := ShaderMaterial.new()
-	mat.shader = sh
-	mat.set_shader_parameter("m", m)
-	_mats[m] = mat
-	return mat
-
-
-static func _ensure() -> void:
-	if _dummy != null:
-		return
-	assert(baker != null, "Sprites.baker muss gesetzt sein")
-	_dummy_root = RenderingServer.canvas_item_create()
-	_dummy = _SP.new(_dummy_root)
-	RenderingServer.frame_post_draw.connect(_on_post_draw)
-
-
-static func _on_post_draw() -> void:
-	_drawn += 1
-
-
-static func _gen() -> _Gen:
-	while _gens.size() <= _cur:
-		var g := _Gen.new()
-		g.raw = baker.make_atlas(atlas_size)
-		g.fin = baker.make_atlas(atlas_size)     # nach raw angelegt -> rendert danach
-		_gens.append(g)
-	return _gens[_cur]
-
-
-## Painter/Items freigeben, sobald der Atlas nach dem letzten commit gerendert wurde.
-static func _settle(g: _Gen) -> void:
-	if g.commit_drawn < 0 or _drawn <= g.commit_drawn:
-		return
-	_release(g)
-	g.raw.vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
-	g.fin.vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
-
-
-static func _release(g: _Gen) -> void:
-	for p: QP in g.painters:
-		p.end()
-		p.free_all()
-	g.painters.clear()
-	for it in g.fx:
-		RenderingServer.canvas_item_clear(it)
-		RenderingServer.canvas_item_set_visible(it, false)
-		_fx_pool.append(it)
-	g.fx.clear()
-	g.draw_index = 0
-	g.commit_drawn = -1
-
-
-## Cache leeren = auf das andere Atlas-Paar wechseln und dieses leeren.
-static func _swap() -> void:
-	_CACHE.clear()
-	_cur = 1 - _cur
-	var g := _gen()
-	_release(g)
-	g.raw.reset()
-	g.fin.reset()
-
-
-static func _fx_item(g: _Gen, mat: ShaderMaterial, clip: Rect2) -> RID:
-	var it: RID
-	if _fx_pool.is_empty():
-		it = RenderingServer.canvas_item_create()
-	else:
-		it = _fx_pool.pop_back()
-	g.fx.append(it)
-	RenderingServer.canvas_item_set_parent(it, g.fin.host.get_canvas_item())
-	RenderingServer.canvas_item_set_visible(it, true)
-	RenderingServer.canvas_item_set_draw_index(it, 100000 + g.draw_index)
-	g.draw_index += 1
-	RenderingServer.canvas_item_set_material(it, mat.get_rid())
-	RenderingServer.canvas_item_set_default_texture_filter(it, RenderingServer.CANVAS_ITEM_TEXTURE_FILTER_NEAREST)
-	RenderingServer.canvas_item_set_custom_rect(it, true, clip)
-	RenderingServer.canvas_item_set_clip(it, true)
-	return it
-
-
-## Umriss + Rimlight + Nebel: liest das rohe Bild img (Atlas raw) und schreibt
-## das Ergebnis in den Bereich dst des Atlas fin der aktuellen Generation.
-static func _postprocess(img: QImg, dst: Rect2i, rim_rgb: Variant, rim_side: int, fog_rgb: Array, fog: float,
+## Umriss + Rimlight + Nebel: Silhouetten aus dem rohen Bild (raw[src]) nach fin[dst].
+static func _postprocess(src: Rect2i, dst: Rect2i, rim_rgb: Variant, rim_side: int, fog_rgb: Array, fog: float,
 		outline: Array = [4, 5, 10]) -> QImg:
-	var f := float(int(255 * fog)) / 255.0 if fog > 0.0 else 0.0
-	var fogc := Color(float(fog_rgb[0]) / 255.0, float(fog_rgb[1]) / 255.0, float(fog_rgb[2]) / 255.0)
-	var tex := img.tex.get_rid()
-	var src := img.region
-	var clip := Rect2(dst)
-	var size := Vector2(dst.size)
-	var pos := Vector2(dst.position)
-	var g := _gen()
-	var mk := _fx_item(g, _mat(0.0), clip)
-	var mask := func(rgb: Array, alpha: float, d: Vector2) -> void:
-		var a := alpha / 255.0
-		var c := Color(float(rgb[0]) / 255.0, float(rgb[1]) / 255.0, float(rgb[2]) / 255.0)
-		c = c * (1.0 - f) + fogc * f
-		RenderingServer.canvas_item_add_texture_rect_region(mk, Rect2(pos + d, size), tex, src,
-			Color(c.r * a, c.g * a, c.b * a, a), false, true)
-	for d: Vector2 in [Vector2(-1, 0), Vector2(1, 0), Vector2(0, -1), Vector2(0, 1)]:
-		mask.call(outline, 255.0, d)
+	var masks: Array = []
+	for d: Vector2i in [Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1)]:
+		masks.append([outline, 255, d.x, d.y])
 	if rim_rgb != null:
-		mask.call(rim_rgb, 235.0, Vector2(rim_side, 0))
-		mask.call(_mul(rim_rgb, 0.6), 160.0, Vector2(0, -1))
-	var fi := _fx_item(g, _mat(1.0 - f), clip)
-	RenderingServer.canvas_item_add_texture_rect_region(fi, Rect2(pos, size), tex, src,
-		Color(fogc.r * f, fogc.g * f, fogc.b * f, 1.0), false, true)
-	return QImg.new(g.fin.texture(), clip)
+		masks.append([rim_rgb, 235, rim_side, 0])
+		masks.append([_mul(rim_rgb, 0.6), 160, 0, -1])
+	var f := float(int(255 * fog)) / 255.0 if fog > 0.0 else 0.0
+	return _ec().finish(src, dst, masks, f, fog_rgb, true)
 
 
 static func frame_count(anim: String) -> int:
@@ -881,27 +598,12 @@ static func frame_count(anim: String) -> int:
 
 ## Alles verwerfen (wie _CACHE.clear(), z. B. beim Zonenwechsel).
 static func clear_cache() -> void:
-	if _dummy == null:
+	if _cache_obj == null:
 		_CACHE.clear()
-		return
-	_swap()
+	else:
+		_cache_obj.swap()
 
 
-static func _alloc(w: int, h: int, emit_used: bool) -> Array:
-	# [raw, emit|null, fin] - bei vollem Atlas auf das andere Paar wechseln
-	for attempt in 2:
-		var g := _gen()
-		var r: Variant = g.raw.alloc(w, h)
-		var re: Variant = g.raw.alloc(w, h) if emit_used and r != null else Rect2i()
-		var rf: Variant = g.fin.alloc(w, h)
-		if r != null and re != null and rf != null:
-			return [r, re if emit_used else null, rf]
-		_swap()
-	return []
-
-
-## Fertiges Figurenbild. Rückgabe [img: QImg, emit: QImg|null, ax: int, ay: int, meta: Dictionary].
-## anchor = Fußpunkt im Bild. meta: eye/hand/head (Vector2, relativ zum Anker, px), head_top (float).
 static func get_(look: Dictionary, anim: String, frame: int, height_px: float, facing: int = 1,
 		rim: Variant = null, rim_side: int = 1, fog_rgb: Array = [0, 0, 0], fog: float = 0.0,
 		outline: Array = [4, 5, 10]) -> Array:
@@ -911,11 +613,10 @@ static func get_(look: Dictionary, anim: String, frame: int, height_px: float, f
 	var hit: Variant = _CACHE.get(key)
 	if hit != null:
 		return hit
-	_ensure()
-	for gg: _Gen in _gens:
-		_settle(gg)
+	var ec := _ec()
+	ec.settle()
 	if _CACHE.size() > _CACHE_MAX:     # wie _CACHE.clear() im Original, aber vor dem Zeichnen
-		_swap()
+		ec.swap()
 
 	var k := hpx / 48.0
 	var left := 60.0 if anim == "die" else _PAD
@@ -934,18 +635,12 @@ static func get_(look: Dictionary, anim: String, frame: int, height_px: float, f
 	var emit_used: bool = (P["muzzle"] or P["scanner"] or fallen or (umb and rot == 0.0)
 		or bool(look.get("led", false)) or look.get("head") == "visor" or (bool(look.get("cig", false)) and rot == 0.0))
 
-	var slots := _alloc(W, H, emit_used)
+	var slots := ec.alloc(W, H, 2 if emit_used else 1)
 	if slots.is_empty():
 		return [null, null, ax, ay, {}]
-	var g := _gen()
 	var r: Rect2i = slots[0]
-	var p := _painter_for(g, r)
-	var pe: QP
-	if emit_used:
-		pe = _painter_for(g, slots[1])
-	else:
-		_dummy.begin()
-		pe = _dummy
+	var p: QP = ec.painter(r)
+	var pe: QP = ec.painter(slots[1]) if emit_used else ec.dummy_painter()
 	for q: QP in [p, pe]:
 		q.translate(ax, ay)
 		q.scale(k, k)
@@ -962,17 +657,14 @@ static func get_(look: Dictionary, anim: String, frame: int, height_px: float, f
 	if fallen:
 		_fallen_umbrella(p, pe, look)
 	if not emit_used:
-		_dummy.end()
-	g.raw.commit()
+		pe.end()
 
 	var org := Vector2(r.position)
 	var e_pt := tr_ * (res[0] as Vector2) - org
 	var h_pt := tr_ * (res[2] as Vector2) - org
 	var c_pt := tr_ * (res[1] as Vector2) - org
-	var out := _postprocess(QImg.new(g.raw.texture(), Rect2(r)), slots[2], rim, rim_side, fog_rgb, fogq, outline)
-	g.fin.commit()
-	g.commit_drawn = _drawn
-	var emit: Variant = QImg.new(g.raw.texture(), Rect2(slots[1] as Rect2i)) if emit_used else null
+	var emit: Variant = ec.raw_img(slots[1]) if emit_used else null
+	var out := _postprocess(r, slots[-1], rim, rim_side, fog_rgb, fogq, outline)
 	if facing < 0:
 		out = out.mirror()
 		if emit != null:

@@ -53,17 +53,17 @@ func _process(_d: float) -> void:
 	_last_drawn = Engine.get_frames_drawn()
 	frame += 1
 	if OS.get_cmdline_user_args().has("--trace"):
-		print("f", frame, " post_draw=", Sprites._drawn, " drawn=", Engine.get_frames_drawn())
+		print("f", frame, " post_draw=", ExactCache._drawn, " drawn=", Engine.get_frames_drawn())
 	if frame == 3:
 		_bake(results.size(), (data["cases"] as Array).size())
 	if frame < 8:
 		return
 	# Bild je Atlas-Textur (bei Atlas-Wechsel liegen Einträge in beiden Paaren)
 	var imgs := {}
-	for gen: Variant in Sprites._gens:
+	for gen: Variant in Sprites._cache_obj.gens:
 		for at: Baker.Atlas in [gen.raw, gen.fin]:
 			imgs[at.texture()] = at.texture().get_image()
-	print("Atlas-Paare: ", Sprites._gens.size(), "  aktuell: ", Sprites._cur)
+	print("Atlas-Paare: ", Sprites._cache_obj.gens.size(), "  aktuell: ", Sprites._cache_obj.cur)
 	var meta: Array = []
 	for i in results.size():
 		var r: Array = results[i]
