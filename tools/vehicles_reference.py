@@ -13,6 +13,12 @@ app = QGuiApplication([])
 from shadegunner.render import vehicles  # noqa: E402
 
 out = sys.argv[1]
+# Datenstand: src/data/d_vehicles.gd wurde vor 5bf5814 exportiert (VARIANTS 16, 10 Autofarben).
+# Solange main nicht neu exportiert ist, die Referenz auf diesen Stand setzen (--data=export);
+# mit --data=python wird gegen den aktuellen Python-Stand verglichen.
+if "--data=python" not in sys.argv:
+    vehicles.VARIANTS = 16
+    vehicles.BODY["car"] = vehicles.BODY["car"][:10]
 os.makedirs(out, exist_ok=True)
 RIMS = [(150, 160, 190), (64, 210, 220), (224, 72, 150), (90, 96, 120)]
 PPU = [0.5, 0.75, 1.0, 1.3, 1.75, 2.25]
