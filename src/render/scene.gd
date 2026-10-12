@@ -1131,12 +1131,284 @@ func _wisps(p: QP, dt: float, _cam: float) -> void:
 
 
 # ---- vorläufige Stubs (werden gruppenweise ersetzt)
-func _facade_life(_pa: QP, _ea: QP, _cam: float, _t: float, _dt: float) -> void:
-	pass
-func _gate(_pa: QP, _ea: QP, _x: float, _g: Variant, _t: float) -> void:
-	pass
-func _street(_pa: QP, _ea: QP, _cam: float, _t: float) -> void:
-	pass
+# ------------------------------------------------------------------ Häuserfront
+func _facade_life(p: QP, e: QP, cam: float, t: float, dt: float) -> void:
+	var fac: City.Layer = city.facade
+	# Neon-Schilder (+ Lichthof im Dunst); bei Stromausfall nur Notstrom-Schilder
+	var halos: Array = []
+	var L0 := cam * fac.factor - W * 0.5 - 140
+	var L1 := cam * fac.factor + W * 0.5 + 40
+	for s: City.Sign in city.visible(city.signs, city._sign_x, L0, L1):
+		var x: float = fac.screen_x(s.L, cam)
+		if x < -s.w - 30 or x > W + 30:
+			continue
+		var lv: float = s.lit(t)
+		if dark > 0.4 and Py.imod(s.seed_, 4) != 0:
+			lv = 0.0
+		if lv > 0:
+			p.draw_image_at(int(x), int(s.y), s.on)
+			e.draw_image_at(int(x), int(s.y), s.emit)
+			halos.append([x + s.w / 2.0, s.y + s.h / 2.0, maxf(s.w, s.h) * 0.9 + 10, s.color])
+		else:
+			p.draw_image_at(int(x), int(s.y), s.off)
+	if not halos.is_empty():
+		p.set_mode(PLUS)
+		for ha: Array in halos:
+			var hx: float = ha[0]
+			var hy: float = ha[1]
+			var r: float = ha[2]
+			var c: Array = ha[3]
+			var g := QGrad.radial(hx, hy, r)
+			g.set_color_at(0, QP.rgb(c, 46))
+			g.set_color_at(0.5, QP.rgb(c, 16))
+			g.set_color_at(1, QP.c(0, 0, 0, 0))
+			p.fill_rect(hx - r, hy - r, 2 * r, 2 * r, g)
+		p.set_mode(OVER)
+	# Fernseher-Fenster
+	for tv: Array in city.visible(city.tvs, city._tv_x, L0 - fac.lmin, L1 - fac.lmin):
+		var wx: float = tv[0]
+		var wy: float = tv[1]
+		var ww: float = tv[2]
+		var wh: float = tv[3]
+		var seed_: int = tv[4]
+		var x := fac.screen_x(wx + fac.lmin, cam)
+		if x < -10 or x > W + 10:
+			continue
+		if dark > 0.4:
+			p.fill_rect(int(x), wy, ww, wh, QP.rgb([8, 10, 18]))
+			continue
+		var n := Scene._hash(int(t * 6), seed_)
+		var c := Scene.mix([40, 60, 140], [150, 190, 255], n)
+		if Py.imod(seed_, 5) == 0:
+			c = Scene.mix(DScene.MAGENTA, DScene.PALE, n * 0.6)
+		for q: QP in [p, e]:
+			q.fill_rect(int(x), wy, ww, wh, QP.rgb(c))
+	# Lampions
+	for la: Array in city.visible(city.lanterns, city._lan_x, L0, L1):
+		var L: float = la[0]
+		var y: float = la[1]
+		var c: Array = la[2]
+		var ph: float = la[3]
+		var x := fac.screen_x(L, cam) + sin(t * 1.7 + ph) * 0.8
+		if x < -4 or x > W + 4:
+			continue
+		for q: QP in [p, e]:
+			q.set_no_pen()
+			q.set_brush(QP.rgb(c))
+			q.draw_ellipse(int(x) - 2, y, 4, 5)
+		p.fill_rect(int(x) - 1, y + 2, 2, 1, QP.rgb(Scene.mix(c, DScene.WHITE, 0.6)))
+	_blinks(p, e, cam, t, "fac", fac)
+	# Dampf aus Lüftungen
+	for v: Array in city.vents:
+		var L: float = v[0]
+		var y: float = v[1]
+		var x := fac.screen_x(L, cam)
+		if -20 < x and x < W + 20 and rng.random() < dt * 1.3:
+			fx.puff(L, y, null, null, 0.8)
+	for mh: Array in city.manholes:
+		var mx: float = mh[0]
+		var md: float = mh[1]
+		var sx := Persp.screen_x(mx, md, cam)
+		if -20 < sx and sx < W + 20 and rng.random() < dt * 2.2:
+			fx.puff(rng.uniform(-6, 6), Persp.ground_y(md) - 1, mx, md, 1.2)
+	# Ausgangstor
+	if city.gate != null:
+		var g: Dictionary = city.gate
+		var x := fac.screen_x(float(g["L"]), cam)
+		if -130 < x and x < W + 10:
+			_gate(p, e, x, g, t)
+
+
+func _gate(p: QP, e: QP, x: float, g: Dictionary, t: float) -> void:
+	var open_ := _gate_open
+	var col: Array = [90, 230, 140] if open_ else DScene.CRIMSON
+	var txt: String = g["label"]
+	var tw := Pixfont.text_width(txt, 1)
+	var bx := int(x + float(g["w"]) / 2 - tw / 2.0 - 5)
+	p.fill_rect(bx, g["y"], tw + 10, 13, QP.rgb(DScene.VOID))
+	for q: QP in [p, e]:
+		Pixfont.draw(q, bx + 5, float(g["y"]) + 3, txt, col, 1, null)
+		q.set_pen(QP.rgb(col))
+		q.draw_rect(bx, g["y"], tw + 9, 12)
+	var door: Array = g["door"]
+	var dx: float = door[0]
+	var dy: float = door[1]
+	var dw: float = door[2]
+	var dh: float = door[3]
+	var X := int(x + (dx - float(g["L"])))
+	if open_:
+		var gr := QGrad.linear(0, dy, 0, dy + dh)
+		gr.set_color_at(0, QP.c(40, 120, 90))
+		gr.set_color_at(1, QP.c(200, 255, 220))
+		for q: QP in [p, e]:
+			q.fill_rect(X, dy, dw, dh, gr)
+	else:
+		var blink := Py.imod(int(t * 2), 2) == 0
+		for q: QP in [p, e]:
+			if blink:
+				q.fill_rect(X, dy - 3, dw, 2, QP.rgb(DScene.CRIMSON))
+
+
+# ------------------------------------------------------------------ Straße
+func _street(p: QP, e: QP, cam: float, t: float) -> void:
+	var th: Dictionary = city.th
+	var fy := int(Persp.FACADE_Y)
+	p.fill_rect(0, fy, W, H - fy, QP.rgb(th["street"]))
+	city.draw_ground(p, cam)
+	# Reflexionen liegen AUF dem nassen Asphalt (die Oberfläche spiegelt, nicht
+	# der Untergrund): erst der Baukörper normal, dann die Neon-Leuchten additiv.
+	var fac: City.Layer = city.facade
+	var x0 := fac.lmin - cam * fac.factor + W * 0.5
+	var band := 12
+	var k := _reflk * (1.0 - 0.8 * dark)
+	for rm: Array in [[city.facade_refl_body, OVER, minf(1.0, 0.8 * k)],
+			[city.facade_refl, PLUS, minf(1.0, 0.95 * k)]]:
+		var refl: QImg = rm[0]
+		p.set_mode(rm[1])
+		p.set_opacity(rm[2])
+		var hlim := mini(refl.height(), H - fy)
+		for kb in range(0, hlim, band):
+			var off := sin(t * 2.3 + kb * 0.37) * 1.2
+			p.draw_image(Rect2(0, fy + kb, W, band), refl, Rect2(-x0 - off, kb, W, band))
+		p.set_opacity(1.0)
+	p.set_mode(OVER)
+	# In Pfützen ist die Fahrbahn noch nasser -> Reflexion dort klar verstärkt.
+	var vis: Array = []
+	var reg_rects: Array = []
+	for pd: Array in city.puddles:
+		var wx: float = pd[0]
+		var pdepth: float = pd[1]
+		var rw: float = pd[2]
+		var rh: float = pd[3]
+		var sx := Persp.screen_x(wx, pdepth, cam)
+		if sx < -80 or sx > W + 80:
+			continue
+		var y := Persp.ground_y(pdepth)
+		var rx := maxf(3.0, rw * Persp.ppu(pdepth))
+		var ry := maxf(5.0, rh * 3.2)
+		vis.append([sx, y, rx, ry])
+		reg_rects.append(Rect2(sx - rx, y - ry, 2 * rx, 2 * ry))
+	if not reg_rects.is_empty():
+		p.save()
+		p.set_clip_ellipses(reg_rects)
+		for rm: Array in [[city.facade_refl_body, OVER, minf(1.0, 0.95 * k)],
+				[city.facade_refl, PLUS, minf(1.0, 1.0 * k)]]:
+			var refl: QImg = rm[0]
+			p.set_mode(rm[1])
+			p.set_opacity(rm[2])
+			var hlim := mini(refl.height(), H - fy)
+			for kb in range(0, hlim, band):
+				var off := sin(t * 2.3 + kb * 0.37) * 1.2
+				p.draw_image(Rect2(0, fy + kb, W, band), refl, Rect2(-x0 - off, kb, W, band))
+			p.set_opacity(1.0)
+		p.restore()
+		p.set_mode(OVER)
+	# Pfützen-Glanz: heller Schimmer, damit die nassen Stellen als Pfützen erkennbar sind
+	p.set_mode(PLUS)
+	p.set_no_pen()
+	for v: Array in vis:
+		var sx: float = v[0]
+		var y: float = v[1]
+		var rx: float = v[2]
+		var ry: float = v[3]
+		var g := QGrad.radial(sx, y, maxf(rx, 8))
+		g.set_color_at(0.0, QP.rgb([120, 150, 195], int(52 * k)))
+		g.set_color_at(1.0, QP.c(0, 0, 0, 0))
+		p.save()
+		p.translate(sx, y)
+		p.scale(1.0, maxf(0.22, ry / maxf(rx, 8)))
+		p.translate(-sx, -y)
+		p.fill_rect(sx - rx, y - rx, 2 * rx, 2 * rx, g)
+		p.restore()
+	p.set_mode(OVER)
+	# Neon-Spiegelung (live, mit Flackern) - ebenfalls weich
+	p.set_mode(PLUS)
+	var L0 := cam * fac.factor - W * 0.5 - 140
+	for s: City.Sign in city.visible(city.signs, city._sign_x, L0, L0 + W + 180):
+		var x: float = fac.screen_x(s.L, cam)
+		if x < -s.w or x > W or s.lit(t) <= 0 or (dark > 0.4 and Py.imod(s.seed_, 4) != 0):
+			continue
+		var ry := fy + (fy - s.y - s.h)
+		if ry > H:
+			continue
+		var key := "sign%d" % s.get_instance_id()
+		var r: Variant = _refl.get(key)
+		if r == null:
+			r = City.soft_reflection(s.emit)
+			_refl[key] = r
+		p.set_opacity(minf(1.0, 0.48 * k))
+		p.draw_image(Rect2(int(x), ry, s.w, s.h * 1.9), r)
+	p.set_opacity(1.0)
+	p.set_mode(OVER)
+	# Asphalt-Körnung noch einmal mit reduzierter Deckkraft darüber: die Reflexion
+	# sinkt in die Textur, die Straße bleibt als Straße lesbar (kein voller Spiegel).
+	p.set_opacity(0.42)
+	city.draw_ground(p, cam)
+	p.set_opacity(1.0)
+	# Laternen: Kopf, Kegel, Lichtpfütze
+	p.set_mode(PLUS)
+	for lamp: City.Lamp in city.lamps:
+		var x: float = fac.screen_x(lamp.L, cam)
+		if x < -120 or x > W + 120:
+			continue
+		var lv := lamp.level(t) * (1.0 - dark)
+		if lv <= 0.01:
+			continue
+		var arm: float = lamp.arm
+		var hx := x + arm
+		var hy := lamp.y + 4
+		var c: Array = lamp.color
+		var px := Persp.screen_x(lamp.x + arm / fac.factor, 0.25, cam)
+		var gy := Persp.ground_y(0.25)
+		var g := QGrad.linear(hx, hy, hx, gy)
+		g.set_color_at(0, QP.rgb(c, int(34 * lv)))
+		g.set_color_at(1, QP.rgb(c, 0))
+		p.set_no_pen()
+		p.set_brush(g)
+		p.draw_polygon(PackedVector2Array([Vector2(hx - 2, hy), Vector2(hx + 2, hy), Vector2(px + 30, gy),
+			Vector2(px - 30, gy)]))
+		var rg := QGrad.radial(px, gy, 60)
+		rg.set_color_at(0, QP.rgb(c, int(95 * lv)))
+		rg.set_color_at(0.5, QP.rgb(c, int(30 * lv)))
+		rg.set_color_at(1, QP.c(0, 0, 0, 0))
+		p.save()
+		p.translate(px, gy)
+		p.scale(1.0, 0.32)
+		p.translate(-px, -gy)
+		p.fill_rect(px - 60, gy - 60, 120, 120, rg)
+		p.restore()
+	p.set_mode(OVER)
+	for lamp: City.Lamp in city.lamps:
+		var x: float = fac.screen_x(lamp.L, cam)
+		if x < -20 or x > W + 20:
+			continue
+		var lv := lamp.level(t) * (1.0 - dark)
+		var c: Array = lamp.color if lv > 0.5 else Scene.mul(lamp.color, 0.3)
+		for q: QP in ([p, e] if lv > 0.5 else [p]):
+			q.fill_rect(int(x + lamp.arm) - 2, lamp.y + 3, 5, 2, QP.rgb(c))
+	# Suchscheinwerfer: die nasse Fahrbahn wirft unter jedem Leuchtkörper einen weichen
+	# Lichtschleier zurück (kein harter Strahl - nur diffuser Schimmer).
+	var tint := Scene.mix([170, 180, 220], th["sky_hor"], 0.25)
+	p.set_mode(PLUS)
+	p.set_no_pen()
+	for sl: Array in city.searchlights:
+		var L: float = sl[0]
+		var _y: float = sl[1]
+		var sp: float = sl[2]
+		var ph: float = sl[3]
+		var x: float = city.mid.screen_x(L, cam)
+		if x < -80 or x > W + 80:
+			continue
+		var warm := 0.4 + 0.6 * absf(sin(t * sp + ph))
+		var g := QGrad.linear(0, fy, 0, fy + 120)
+		g.set_color_at(0, QP.rgb(tint, int(34 * warm * (1 - dark))))
+		g.set_color_at(0.4, QP.rgb(tint, int(14 * warm * (1 - dark))))
+		g.set_color_at(1, QP.c(0, 0, 0, 0))
+		p.set_brush(g)
+		p.draw_polygon(PackedVector2Array([Vector2(x - 2, fy), Vector2(x + 2, fy),
+			Vector2(x + 10, fy + 120), Vector2(x - 10, fy + 120)]))
+	p.set_mode(OVER)
+	fx.draw_splashes(p, Scene.mix(city.th["fog"], DScene.PALE, 0.5))
 func _rim_for(_a: Variant, _cam: float) -> Variant:
 	return null
 func _mirror(_img: QImg) -> Variant:
