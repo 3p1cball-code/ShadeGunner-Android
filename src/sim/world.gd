@@ -1634,4 +1634,389 @@ func _fail(reason: String) -> void:
 		player.dead_t = 0.0
 	events.append(["fail", reason])
 
-# --- TEIL5 ---
+# ------------------------------------------------------------------ NPC-Verhalten
+func _alert(a: Actor) -> void:
+	if a.alert or not a.alive:
+		return
+	a.alert = true
+	if a.aggressive:
+		a.state = "attack"
+		a.timer = 99.0
+		events.append(["attack", a.uid])
+	else:
+		a.state = "flee"
+		a.timer = 99.0
+		events.append(["flee", a.uid])
+	a.target_depth = rng.uniform(Config.DEPTH_MIN, 0.95)
+
+
+func _panic_one(a: Actor, src_x: float) -> void:
+	if not a.alive or a.state in ["flee", "attack"]:
+		return
+	if a.state == "duck":            # wer am Boden liegt, bleibt unten
+		a.timer = maxf(a.timer, 2.0)
+		return
+	a.state = "panic"
+	a.timer = rng.uniform(2.5, 4.5)
+	a.facing = 1 if a.x >= src_x else -1
+	a.target_depth = rng.uniform(Config.DEPTH_MIN, 0.95)
+
+
+func _panic_area(x: float, radius: float, exclude: Actor = null) -> void:
+	for a: Actor in living():
+		if a == exclude:
+			continue
+		if absf(a.x - x) < radius:
+			if a.is_replicant and not a.alert and rng.random() < 0.35 and (a.scanned or a.aimed_t > 0.5):
+				_alert(a)
+			else:
+				_panic_one(a, x)
+
+
+func _update_npcs(dt: float, frozen: bool = false) -> void:
+	var p := player
+	var m := run.mods
+	var L := length
+	for a: Actor in actors:
+		if a.player or not a.alive or a.escaped:
+			continue
+		a.flash_t = maxf(0.0, a.flash_t - dt)
+		a.attack_cd = maxf(0.0, a.attack_cd - dt)
+		if not (aiming and target == a):
+			a.aimed_t = maxf(0.0, a.aimed_t - dt)
+		# Augenreflex
+		if a.glint_t > 0:
+			a.glint_t -= dt
+		var dark := blackout_t > 0.0
+		if _truthy(a.tells.get("pupils")):
+			a.glint_next -= dt * float(m["glint"]) * (4.0 if dark else 1.0)
+			if a.glint_next <= 0:
+				a.glint_t = 0.45 if dark else 0.24
+				a.glint_next = rng.uniform(5.0, 10.0)
+				if dark:
+					_glint_seen(a, "AUGENREFLEX IM DUNKELN", Config.TARGET_RANGE)
+				elif a == target:
+					_glint_seen(a, "AUGENREFLEX!", Config.OBSERVE_RANGE)
+		a.dodge_t = maxf(0.0, a.dodge_t - dt)
+		_physics_z(a, dt)
+		if frozen and a.state in ["attack", "punch", "leap"]:
+			a.state = "walk"
+			a.timer = 4.0
+		var st := a.state
+		a.timer -= dt
+		if st == "walk":
+			a.vx = a.facing * a.speed
+			if a.timer <= 0:
+				if not _truthy(a.tells.get("gait")) and rng.random() < 0.35:
+					a.state = "idle"
+					a.timer = rng.uniform(1.5, 5.0)
+				else:
+					a.timer = rng.uniform(3.0, 9.0)
+					if rng.random() < 0.3:
+						var lo := Config.DEPTH_MIN + 0.02
+						var hi := 0.97
+						if a.home != null:
+							lo = a.home[0]
+							hi = a.home[1]
+						a.target_depth = rng.uniform(lo, hi)
+			if a.x < 30 and a.facing < 0 or a.x > L + 80 and a.facing > 0:
+				a.facing = -a.facing
+		elif st == "idle":
+			a.vx = 0.0
+			if a.timer <= 0:
+				a.state = "walk"
+				a.facing = rng.choice([-1, 1])
+				a.timer = rng.uniform(3.0, 9.0)
+		elif st == "panic":
+			a.vx = a.facing * 52.0
+			if a.timer <= 0:
+				a.state = "walk"
+				a.timer = rng.uniform(3.0, 6.0)
+		elif st in ["duck", "freeze", "hands"]:
+			a.vx = 0.0
+			if a.timer <= 0:
+				if a.group >= 0 and absf(a.x - a.gx) < 30:
+					a.state = "loiter"
+					a.timer = rng.uniform(8.0, 30.0)
+					a.facing = 1 if a.gx >= a.x else -1
+				else:
+					a.state = "idle"                   # erst umsehen, dann weiter
+					a.timer = rng.uniform(0.8, 2.0)
+					a.facing = rng.choice([-1, 1])
+		elif st == "loiter":
+			# Gruppe: stehen, zur Mitte schauen, ab und zu gestikulieren
+			a.vx = 0.0
+			a.facing = 1 if a.gx >= a.x else -1
+			if a.timer <= 0:
+				a.state = "walk"
+				a.timer = rng.uniform(4.0, 9.0)
+				a.facing = rng.choice([-1, 1])
+				a.group = -1
+		elif st == "cower":
+			a.vx = 0.0
+			if a.timer <= 0 and a.aimed_t <= 0.1:
+				a.state = "walk"
+				a.facing = 1 if a.x >= p.x else -1
+				a.timer = 3.0
+		elif st == "flee":
+			a.facing = 1 if a.x >= p.x else -1
+			a.vx = a.facing * 76.0 * float(m["flee"])
+			var gone := absf(a.x - p.x) > 360.0 or a.x < -60 or a.x > L + 200
+			if gone and not frozen and not on_screen(a, -30):
+				_escape(a)
+				continue
+		elif st == "attack":
+			a.facing = 1 if p.x >= a.x else -1
+			var dx := absf(p.x - a.x)
+			var dd := absf(p.depth - a.depth)
+			a.target_depth = p.depth
+			var agile := zone_index >= 2 or a.bounty
+			if dx < 15.0 and dd < 0.08 and a.attack_cd <= 0 and p.alive:
+				a.state = "punch"
+				a.timer = 0.42
+				a.attack_cd = 1.7
+				a.vx = 0.0
+				a.phase = 0.0
+				a.hit_done = false
+				events.append(["punch", a.uid])
+			elif (agile and 36.0 < dx and dx < 85.0 and dd < 0.12 and a.attack_cd <= 0 and a.z <= 0
+					and p.alive and rng.random() < dt * 1.4):
+				# Nexus-Sprungangriff: ausweichen per Sprung oder Tiefenschritt
+				a.state = "leap"
+				a.vz = 150.0
+				a.z = 0.01
+				a.vx = a.facing * minf(220.0, dx * 3.4)
+				a.timer = 1.2
+				a.attack_cd = 2.4
+				a.hit_done = false
+				events.append(["leap", a.uid])
+			else:
+				a.vx = a.facing * (88.0 if dx > 15 else 0.0)
+		elif st == "leap":
+			if not a.hit_done and absf(p.x - a.x) < 14.0 and absf(p.depth - a.depth) < 0.09 \
+					and p.z < Config.JUMP_SAFE_Z:
+				a.hit_done = true
+				hurt_player(a, 120.0)
+			if a.z <= 0.0 and a.vz <= 0.0 and a.timer < 1.1:
+				a.state = "attack"
+				a.vx = 0.0
+		elif st == "punch":
+			a.vx = 0.0
+			if a.timer < 0.22 and not a.hit_done:
+				a.hit_done = true
+				if absf(p.x - a.x) < 22.0 and absf(p.depth - a.depth) < 0.1:
+					if p.z < Config.JUMP_SAFE_Z:
+						hurt_player(a)
+					else:
+						floater(_tr("AUSGEWICHEN"), p, [64, 210, 220], 0.9)
+			if a.timer <= 0:
+				a.state = "attack"
+		# Auf Zielen reagieren
+		if a.aimed_t > 0.9 and a.state in ["walk", "idle", "panic", "loiter"]:
+			if a.is_replicant and rng.random() < dt * 0.9:
+				_alert(a)
+			elif not a.is_replicant:
+				a.state = "cower"
+				a.timer = 1.2
+		# Hindernisse: Replikanten auf der Flucht springen drüber, alle anderen gehen außen herum
+		if a.z <= 0.0 and not (a.state in ["punch", "cower", "idle", "duck", "freeze", "hands", "loiter"]):
+			var o: Variant = _obstacle_ahead(a)
+			if o != null:
+				if a.is_replicant and a.state in ["flee", "attack"] and zone_index >= 1 and o["h"] < 13:
+					a.vz = 135.0
+					a.z = 0.01
+				elif a.dodge_t <= 0.0:
+					var up: float = o["d"] - o["dd"] - 0.05
+					var dn: float = o["d"] + o["dd"] + 0.05
+					var td := up if (absf(a.depth - up) < absf(a.depth - dn) and up > Config.DEPTH_MIN) else dn
+					if td > 0.99:
+						td = up
+					a.target_depth = td
+					a.dodge_t = 0.5
+		# Bewegung
+		var nx := a.x + (a.vx + a.knock) * dt
+		if not blocked(a.x, a.depth, a.z, 2.0) and blocked(nx, a.depth, a.z, 2.0):
+			nx = a.x
+			if a.state == "walk" and a.dodge_t <= 0.0:
+				a.facing = -a.facing
+				a.timer = rng.uniform(2.0, 5.0)
+		a.x = nx
+		a.knock *= 0.85
+		var ddp := a.target_depth - a.depth
+		var sp := 0.45 if a.dodge_t > 0 else (0.35 if a.state in ["flee", "panic", "attack", "leap"] else 0.08)
+		a.depth += maxf(-sp * dt, minf(sp * dt, ddp))
+		a.depth = minf(Config.DEPTH_MAX, maxf(Config.NPC_DEPTH_MIN, a.depth))
+		_animate(a, dt)
+
+
+func _escape(a: Actor) -> void:
+	a.escaped = true
+	a.alive = false
+	if target == a:
+		target = null
+	if a.is_replicant:
+		stats["escaped"] += 1
+		run.totals["escaped"] += 1
+		run.score += Config.POINTS_ESCAPE
+		stats["score"] += Config.POINTS_ESCAPE
+		suspicion = minf(1.0, suspicion + Config.SUSPICION_PER_ESCAPE)
+		combo = 1
+		events.append(["escape", a.uid])
+		_say(_tr("Ein Replikant ist entkommen."))
+
+
+func _update_dead(dt: float) -> void:
+	for a: Actor in actors:
+		if not a.alive and not a.escaped:
+			a.dead_t += dt
+			a.x += a.knock * dt
+			a.knock *= 0.82
+			if a.z > 0.0 or a.vz != 0.0:
+				a.vz = minf(a.vz, 0.0)
+				_physics_z(a, dt)
+			_animate(a, dt)
+
+
+# ------------------------------------------------------------------ Beobachtung
+func _observe(dt: float) -> void:
+	var p := player
+	var rate := float(run.mods["observe"])
+	for a: Actor in living():
+		var d := dist(p, a)
+		if d > Config.OBSERVE_RANGE:
+			a.exposure = maxf(0.0, a.exposure - dt)
+			continue
+		var focus := a == target
+		var fog := steam_at(a.x, a.depth)               # im Dampf sieht man fast nichts
+		a.exposure += dt * rate * (1.0 if focus else 0.2) * (1.0 - 0.75 * fog)
+		if a.exposure >= Config.OBSERVE_SECONDS:
+			a.exposure = 0.0
+			var remaining := []
+			for tn: String in Detection.WEAK_TELLS:
+				if not a.revealed.has(tn):
+					remaining.append(tn)
+			if not remaining.is_empty():
+				var t: String = remaining[0]
+				a.revealed[t] = true
+				if focus:
+					var lbl := _tr(Detection.TELLS[t][3])
+					var present := _truthy(a.tells.get(t))
+					floater(_tr("{}: AUFFÄLLIG", [lbl]) if present else _tr("{}: NORMAL", [lbl]), a,
+							[255, 138, 44] if present else [162, 168, 180], 1.6)
+					events.append(["tell", a.uid, t])
+
+
+# ------------------------------------------------------------------ Animation
+func _animate(a: Actor, dt: float, depth_move: float = 0) -> void:
+	if not a.alive and not a.escaped:
+		a.anim = "die"
+		var nd := Looks.frame_count("die")
+		a.phase = minf(1.0, a.dead_t / 0.9)
+		a.frame = mini(nd - 1, int(a.phase * (nd - 1) + 0.0001))
+		return
+	var st := a.state
+	var speed := absf(a.vx)
+	if (a.z > 0.0 or st == "leap") and not (st in ["aim", "shoot", "hurt"]):
+		a.anim = "jump"
+		a.frame = 0
+		return
+	var anim := "idle"
+	if st in ["walk", "panic", "flee", "attack", "run"] or (a.player and st in ["walk", "run"]):
+		var moving := speed > 1.0 or (a.player and depth_move != 0.0)
+		if a.player:
+			anim = "run" if st == "run" else ("walk" if moving else "idle")
+		elif st == "panic":
+			anim = "panic" if moving else "idle"
+		elif st in ["flee", "attack"]:
+			anim = "run" if moving else "idle"
+		else:
+			anim = "walk" if moving else "idle"
+		if anim in ["walk", "run", "panic"]:
+			var adv := maxf(speed, 26.0 if (a.player and depth_move != 0.0) else 0.0)
+			a.phase = Py.mod(a.phase + adv * dt / (Config.STRIDE_UNITS * (1.6 if anim != "walk" else 1.0)), 1.0)
+		else:
+			a.phase = Py.mod(a.phase + dt * 0.4, 1.0)
+	elif st == "idle":
+		anim = "idle"
+		a.phase = Py.mod(a.phase + dt * 0.4, 1.0)
+	elif st == "cower":
+		anim = "cower"
+		a.phase = Py.mod(a.phase + dt * 2.0, 1.0)
+	elif st == "duck":
+		anim = "duck"
+		a.phase = Py.mod(a.phase + dt * 1.5, 1.0)
+	elif st == "hands":
+		anim = "hands"
+		a.phase = Py.mod(a.phase + dt * 1.2, 1.0)
+	elif st == "loiter":
+		anim = "talk"
+		a.phase = Py.mod(a.phase + dt * (0.35 + 0.1 * Py.imod(a.uid, 3)), 1.0)
+	elif st == "punch":
+		anim = "punch"
+		a.phase = minf(0.99, 1.0 - maxf(0.0, a.timer) / 0.42)
+	elif st in ["aim", "shoot", "scan", "hurt"]:
+		anim = st
+		if st == "shoot":
+			a.phase = minf(0.99, (Config.SHOT_COOLDOWN - shot_cd) / 0.25)
+		else:
+			a.phase = Py.mod(a.phase + dt * 2.0, 1.0)
+	else:
+		anim = "idle"
+	a.anim = anim
+	var n := Looks.frame_count(anim)
+	a.frame = Py.imod(int(a.phase * n), n)
+
+
+# ------------------------------------------------------------------ Zonen
+func _zone_clear() -> void:
+	if state != "playing":
+		return
+	var missed: bool = stats["reps"] < quota
+	state = "zone_clear"
+	mission_failed = missed
+	if missed:
+		suspicion = minf(1.0, suspicion + 0.15)
+	else:
+		var bonus: int = 250 + 50 * (int(stats["reps"]) - quota)
+		run.score += bonus
+		stats["score"] += bonus
+	run.hp = player.hp
+	for k: String in ["scans", "shots"]:
+		run.totals[k] += stats[k]
+	run.totals["time"] += stats["time"]
+	events.append(["zone_clear", missed])
+	_say(_tr("Zone '{}' geschafft.", [_tr(zone["name"])]))
+
+
+## Neue World für die nächste Zone (oder null, wenn Tyrell geschafft).
+func next_world(seed_value: Variant = null) -> World:
+	if zone_index + 1 >= DSim.ZONES.size():
+		return null
+	run.zone_index = zone_index + 1
+	run.suspicion = maxf(0.0, run.suspicion - 0.1)
+	return World.new(run, seed if seed_value == null else int(seed_value))
+
+
+## Kompatibilität: wechselt in-place in die nächste Zone.
+func advance_zone() -> bool:
+	if state != "zone_clear":
+		return false
+	var nw := next_world()
+	if nw == null:
+		state = "finished"
+		return false
+	for prop: Dictionary in get_property_list():
+		if not (prop["usage"] & PROPERTY_USAGE_SCRIPT_VARIABLE):
+			continue
+		var pn: String = prop["name"]
+		if pn in ["suspicion", "points"]:       # Durchreicher auf run
+			continue
+		set(pn, nw.get(pn))
+	return true
+
+
+# ------------------------------------------------------------------ Projektion
+## Welt -> Bildschirm: [cx, ground_y, height_px].
+func project(actor: Variant, _w: Variant = null, _h: Variant = null) -> Array:
+	return [Persp.screen_x(actor.x, actor.depth, camera_x), Persp.ground_y(actor.depth),
+			Persp.figure_h(actor.depth)]
