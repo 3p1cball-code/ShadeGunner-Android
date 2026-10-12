@@ -1069,6 +1069,11 @@ func _unstick(acts: Array) -> void:
 func _new_vehicle(lane: float, dr: int, x: Variant = null) -> Variant:
 	var kinds: Array = DSim.ZONE_TRAFFIC[Py.imod(zone_index, DSim.ZONE_TRAFFIC.size())]
 	var kind: String = rng.choice(kinds)
+	if kind == "bus":                                  # keine Bus-Kolonne
+		for vb: Dictionary in vehicles:
+			if vb["kind"] == "bus" and absf(vb["x"] - camera_x) < 900.0:
+				kind = "car"
+				break
 	var dm: Array = DSim.VEHICLES[kind]
 	var L: float = dm[0]
 	var h: float = dm[1]
@@ -1161,12 +1166,12 @@ func _update_traffic(dt: float, spawn: bool = true) -> void:
 			v["speed"] += maxf(-acc * dt, minf(acc * dt, goal - v["speed"]))
 			# dichter Verkehr: hier und da ein genervtes Meep (nur im Bild)
 			if traffic_slow < 0.7 and v["speed"] > 18 and absf(v["x"] - camera_x) < 340 \
-					and rng.random() < dt * 0.045:
+					and rng.random() < dt * 0.018:
 				events.append(["jam_honk", v["kind"], v["x"] - camera_x])
 			# Stau: wer lange steckt, hupt (nur im Bild)
 			if vmax > 0 and v["speed"] < vmax * 0.4:
 				v["slow_t"] = float(v.get("slow_t", 0.0)) + dt
-				if v["slow_t"] > 1.5 and rng.random() < dt * 0.6 and absf(v["x"] - camera_x) < 330:
+				if v["slow_t"] > 1.5 and rng.random() < dt * 0.25 and absf(v["x"] - camera_x) < 330:
 					events.append(["jam_honk", v["kind"], v["x"] - camera_x])
 					v["slow_t"] = 0.0
 			else:
@@ -1208,7 +1213,7 @@ func _update_traffic(dt: float, spawn: bool = true) -> void:
 			# anhupe, wenn ich in der Spur stehe (auch seitlich / halb davor)
 			if (absf(p.depth - lane) < Config.LANE_HALF + 0.035 and v["speed"] > 12
 					and -v["L"] < ahead and ahead < maxf(v["speed"], 45.0) * 1.5 + v["L"] and v["honk_cd"] <= 0.0):
-				v["honk_cd"] = 2.0
+				v["honk_cd"] = 2.8
 				events.append(["honk", v["kind"]])
 			if in_lane and absf(p.x - v["x"]) < v["L"] * 0.5 + 3 and p.z < v["h"] * 0.75:
 				if ahead > 0.0 and v["speed"] > Config.CAR_DANGER_SPEED:
