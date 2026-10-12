@@ -209,6 +209,14 @@ static func _line(p: QP, a: Vector2, b: Vector2) -> void:
 	_cells(p, _qt_line_cells(xf * a, xf * b))
 
 
+static func _area(pts: PackedVector2Array) -> float:
+	var a := 0.0
+	for i in pts.size():
+		var q := pts[(i + 1) % pts.size()]
+		a += pts[i].x * q.y - q.x * pts[i].y
+	return a * 0.5
+
+
 ## Pixel einzeln im Zielraum füllen (Farbe des Stifts).
 static func _cells(p: QP, cells: Array[Vector2i]) -> void:
 	var col := p.pen_col
@@ -600,8 +608,53 @@ static func _draw_head(p: QP, emit: QP, look: Dictionary, P: Dictionary, hc: Vec
 ## QP strichelt Segmente einzeln und deckt Stoßpixel doppelt -> Pixelmenge selbst bilden.
 static func _polyline(p: QP, pts: PackedVector2Array) -> void:
 	var xf := p.transform()
-	if p.pen_w * sqrt(absf(xf.determinant())) > 1.0 or pts.size() < 2:
-		p.draw_polyline(pts)
+	if pts.size() < 2:
+		return
+	var spx := sqrt(absf(xf.determinant()))
+	if p.pen_w * spx > 1.0:
+		if p.pen_col.a >= 1.0:
+			p.draw_polyline(pts)
+			return
+		# Halbtransparent: Qt füllt den Strich-Umriss (Segmente + runde Stöße) einmal
+		var hw := p.pen_w * 0.5
+		var n := clampi(int(hw * spx * 3.0), 8, 32)
+		var done: Array[PackedVector2Array] = []
+		var fills: Array[PackedVector2Array] = []
+		for i in pts.size():
+			var parts: Array[PackedVector2Array] = []
+			var circ := PackedVector2Array()
+			for j in n:
+				circ.append(pts[i] + Vector2(cos(TAU * j / n), sin(TAU * j / n)) * hw)
+			parts.append(circ)
+			if i > 0:
+				var d := pts[i] - pts[i - 1]
+				if d.length() > 0.0001:
+					var nr := Vector2(-d.y, d.x).normalized() * hw
+					parts.append(PackedVector2Array([pts[i - 1] + nr, pts[i] + nr, pts[i] - nr, pts[i - 1] - nr]))
+			for part in parts:
+				# nur der noch nicht bedeckte Rest des Teils wird gefüllt
+				var pieces: Array[PackedVector2Array] = [part]
+				for old in done:
+					var nxt: Array[PackedVector2Array] = []
+					for pc in pieces:
+						var res := Geometry2D.clip_polygons(pc, old)
+						for r: PackedVector2Array in res:
+							var hole := false
+							for o: PackedVector2Array in res:
+								if o != r and Geometry2D.is_point_in_polygon(r[0], o):
+									hole = true
+							if not hole:
+								nxt.append(r)
+					pieces = nxt
+				fills.append_array(pieces)
+				done.append(part)
+		var col := p.pen_col
+		p.save()
+		p.set_no_pen()
+		p.set_brush(col)
+		for f in fills:
+			p.draw_polygon(f)
+		p.restore()
 		return
 	var seen := {}
 	var cells: Array[Vector2i] = []
