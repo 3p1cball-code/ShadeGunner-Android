@@ -207,6 +207,11 @@ static func _draw_spinner(p: QP, e: QP, police: bool, rnd: int, rim: Array, d: i
 
 static func _ec() -> ExactCache:
 	if _cache_obj == null:
+		# Pixfont-Atlanten zuerst anlegen: Godot rendert Viewports in Erzeugungsreihenfolge,
+		# die Schriftzüge (_stencil) müssen vor den Fahrzeug-Atlanten fertig sein.
+		if Pixfont.baker == null:
+			Pixfont.baker = baker
+		Pixfont.render(" ", [0, 0, 0], 1, null)
 		_cache_obj = ExactCache.new(_CACHE)
 		_cache_obj.atlas_size = atlas_size
 	_cache_obj.ensure(baker)

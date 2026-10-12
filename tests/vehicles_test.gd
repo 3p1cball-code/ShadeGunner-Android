@@ -76,6 +76,10 @@ func _process(_d: float) -> void:
 	if frame < 8:
 		return
 	var imgs := {}
+	if OS.get_cmdline_user_args().has("--trace"):
+		var ti := Pixfont.render("WALLACE", [149, 154, 158], 1, null)
+		print("pixfont: ", ti.region, " atlases=", Pixfont._atlases.size())
+		ti.tex.get_image().save_png(dir + "/pixfont_atlas.png")
 	var meta: Array = []
 	for i in results.size():
 		var r: Array = results[i]
