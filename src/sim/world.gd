@@ -1288,4 +1288,350 @@ func _update_steam(dt: float) -> void:
 		m["s"] = base
 		m["drift"] = 10.0 * sin(t * 0.13 + m["ph"])
 
-# --- TEIL4 ---
+# ------------------------------------------------------------------ Polizei-Suchlicht
+func _update_patrol(dt: float) -> void:
+	var p := player
+	if patrol == null:
+		if patrol_cd != null and state == "playing":
+			patrol_cd = float(patrol_cd) - dt
+			if patrol_cd <= 0:
+				var zp: Variant = zone.get("patrol")
+				patrol_cd = rng.uniform(0.8, 1.2) * (float(zp) if _truthy(zp) else 60.0)
+				var dr: int = rng.choice([-1, 1])
+				var land := rng.random() < SPINNER_LAND_CHANCE
+				var life := rng.uniform(18.0, 25.0) if not land else 90.0
+				var ph := rng.random() * 6.28
+				patrol = {"x": camera_x - dr * 330.0, "dir": dr, "t": 0.0, "life": life,
+						"ph": ph, "on": 0.0, "bx": 0.0, "bd": 0.5, "leaving": false,
+						"mode": "land" if land else "fly", "phase": "fly", "alt": 1.0, "face": dr,
+						"obs": null, "land_t": 0.0}
+				events.append(["patrol"])
+				_say(_tr("Polizei-Spinner mit Suchlicht über der Straße."))
+		watched = false
+		for a: Actor in actors:
+			a.lit_t = 0.0
+		return
+	var P: Dictionary = patrol
+	P["t"] += dt
+	var t: float = P["t"]
+	if (t > P["life"] or state != "playing") and not P["leaving"]:
+		if P["alt"] < 1.0:
+			if P["phase"] != "lift":
+				_spinner_liftoff(P)
+		else:
+			P["leaving"] = true
+	if P["leaving"]:
+		P["x"] += P["dir"] * 140.0 * dt
+		P["on"] = maxf(0.0, P["on"] - dt * 1.5)
+		if absf(P["x"] - camera_x) > 420.0:
+			patrol = null
+			return
+	elif P["mode"] == "land" and (P["phase"] != "fly" or t > 4.0):
+		_update_landing(P, dt)
+	else:
+		var goal := p.x + 40.0 * sin(t * 0.23)
+		var sp := 150.0 if absf(goal - P["x"]) > 120 else 34.0
+		P["x"] += maxf(-sp * dt, minf(sp * dt, goal - P["x"]))
+		if absf(goal - P["x"]) < 160:
+			P["on"] = minf(1.0, P["on"] + dt * 0.8)
+	if P["phase"] == "landed":
+		# Suchlicht vom Bug über die Straße vor dem Spinner
+		P["bx"] = P["x"] + P["face"] * (72.0 + 40.0 * sin(t * 0.5 + P["ph"]))
+		P["bd"] = 0.5 + 0.4 * sin(t * 0.37 + P["ph"] * 1.7)
+	else:
+		P["bx"] = P["x"] + 78.0 * sin(t * 0.52 + P["ph"])
+		P["bd"] = 0.55 + 0.38 * sin(t * 0.39 + P["ph"] * 1.7)
+	var lit_on: bool = P["on"] > 0.5
+	watched = lit_on and in_beam(p)
+	for a: Actor in actors:
+		if a.player or not a.alive or a.escaped:
+			continue
+		if lit_on and in_beam(a):
+			a.lit_t += dt
+			if _truthy(a.tells.get("pupils")) and a.glint_t <= 0 and int(a.lit_t * 1.25) != int((a.lit_t - dt) * 1.25):
+				a.glint_t = 0.3
+				_glint_seen(a, "SUCHLICHT: AUGENREFLEX", Config.OBSERVE_RANGE * 1.3)
+			elif not _truthy(a.tells.get("pupils")) and a.lit_t > 1.6 and not a.revealed.has("pupils") \
+					and dist(p, a) <= Config.OBSERVE_RANGE * 1.3:
+				a.revealed["pupils"] = true
+				if a == target:
+					floater("SUCHLICHT: AUGEN NORMAL", a, [162, 168, 180], 1.4)
+		else:
+			a.lit_t = maxf(0.0, a.lit_t - dt * 2.0)
+
+
+# ------------------------------------------------------------------ Spinner-Landung
+## Freier Platz auf dem Mittelstreifen vor dem Spieler (keine Hindernisse,
+## kein Nudelstand, nicht am Tor). null = keiner.
+func _land_spot() -> Variant:
+	var p := player
+	var base := p.x + p.facing * 95.0
+	for off: float in [0.0, 60.0, -60.0, 130.0, -130.0, 210.0]:
+		var x := minf(length - 130.0, maxf(130.0, base + off))
+		var bad := false
+		for r: Dictionary in ramen:
+			if absf(x - r["x"]) < 120:
+				bad = true
+				break
+		if bad:
+			continue
+		for o: Dictionary in obstacles:
+			if absf(x - o["x"]) < o["w"] + 60 and absf(o["d"] - Config.LAND_DEPTH) < 0.12:
+				bad = true
+				break
+		if bad:
+			continue
+		return x
+	return null
+
+
+func _spinner_liftoff(P: Dictionary) -> void:
+	P["phase"] = "lift"
+	if P["obs"] != null and obstacles.has(P["obs"]):
+		obstacles.erase(P["obs"])
+	P["obs"] = null
+	events.append(["spinner_lift", P["face"]])
+
+
+## Polizei-Spinner landet auf dem Mittelstreifen: Abwind schiebt alles weg,
+## dann leuchtet er die Straße vom Boden aus ab und hebt wieder ab.
+func _update_landing(P: Dictionary, dt: float) -> void:
+	var p := player
+	var ph: String = P["phase"]
+	if ph == "fly":
+		var lx: Variant = _land_spot()
+		if lx == null:
+			P["mode"] = "fly"
+			return
+		P["phase"] = "descend"
+		P["lx"] = lx
+		P["face"] = 1 if p.x >= float(lx) else -1
+		events.append(["spinner_land", P["face"]])
+		_say(_tr("Polizei-Spinner setzt zur Landung an - Kontrolle!"))
+	elif ph == "descend":
+		var dx: float = P["lx"] - P["x"]
+		P["x"] += maxf(-90.0 * dt, minf(90.0 * dt, dx))
+		P["on"] = maxf(0.0, P["on"] - dt * 1.5)
+		if absf(dx) < 30.0:
+			P["alt"] = maxf(0.0, P["alt"] - dt / Config.LAND_DESCENT_S)
+		if P["alt"] <= 0.0:
+			P["phase"] = "landed"
+			P["land_t"] = rng.uniform(Config.LAND_TIME[0], Config.LAND_TIME[1])
+			P["obs"] = {"x": P["x"], "d": Config.LAND_DEPTH, "w": 40.0, "dd": 0.07, "h": 60.0, "kind": "spinner", "seed": 0}
+			obstacles.append(P["obs"])
+			P["tt"] = 0.0
+			events.append(["spinner_touch"])
+	elif ph == "landed":
+		P["land_t"] -= dt
+		P["tt"] = float(P.get("tt", 0.0)) + dt
+		P["on"] = minf(1.0, P["on"] + dt * 1.2)
+		if P["land_t"] <= 0.0:
+			_spinner_liftoff(P)
+	elif ph == "lift":
+		P["on"] = maxf(0.0, P["on"] - dt * 2.0)
+		P["alt"] = minf(1.0, P["alt"] + dt / Config.LAND_ASCENT_S)
+		if P["alt"] >= 1.0:
+			P["mode"] = "fly"
+			P["phase"] = "fly"
+			P["leaving"] = true
+	# Abwind der Turbinen beim Landen/Abheben: schiebt Figuren vom Landeplatz weg
+	if P["phase"] in ["descend", "lift", "landed"] and P["alt"] < 0.7:
+		var k: float = 1.0 - P["alt"] / 0.7
+		if P["phase"] == "landed":
+			k = maxf(0.0, 1.0 - float(P.get("tt", 0.0)) * 0.8)
+		if k > 0.0:
+			for a: Actor in actors:
+				if not a.alive or a.escaped:
+					continue
+				var dxa: float = a.x - P["x"]
+				if absf(dxa) < 75.0 and absf(a.depth - Config.LAND_DEPTH) < 0.3:
+					var s := 1.0 if dxa >= 0 else -1.0
+					var nx := a.x + s * Config.LAND_PUSH * k * dt
+					if not blocked(nx, a.depth, a.z) or blocked(a.x, a.depth, a.z):
+						a.x = nx
+		P["wash"] = k
+	else:
+		P["wash"] = 0.0
+
+
+func in_beam(a: Actor) -> bool:
+	if patrol == null:
+		return false
+	var P: Dictionary = patrol
+	var u: float = (a.x - P["bx"]) / 34.0
+	var w: float = (a.depth - P["bd"]) / 0.13
+	return u * u + w * w < 1.0
+
+
+func _glint_seen(a: Actor, text: String, rng_: float) -> void:
+	if a.revealed.has("pupils") or dist(player, a) > rng_:
+		return
+	a.revealed["pupils"] = true
+	floater(_tr(text), a, [255, 138, 44], 1.6)
+	events.append(["tell", a.uid, "pupils"])
+
+
+# ------------------------------------------------------------------ Ramen
+## Kurz am Nudelstand stehen bleiben füllt ein Herz auf (einmal pro Stand).
+## Der Koch ruft wie im White Dragon: „Akimashita! Irasshai!“ - ein Platz ist frei.
+func _update_ramen(dt: float) -> void:
+	var p := player
+	for i in ramen.size():
+		var r: Dictionary = ramen[i]
+		if not _truthy(r.get("greet")) and absf(p.x - r["x"]) < Config.RAMEN_RANGE + 44 and p.depth < 0.7:
+			r["greet"] = true
+			var cook := _Spot.new(-300 - i, r["x"], r["depth"])
+			if r["used"]:
+				continue
+			if p.hp >= run.max_hp:
+				floater(_tr("FUTATSU DE JUBUN!"), cook, [214, 220, 226], 2.4)
+				_say(_tr("Koch: Zwei reichen. (Integrität ist voll.)"))
+			else:
+				floater(_tr("IRASSHAI! PLATZ FREI!"), cook, [255, 138, 44], 2.4)
+				_say(_tr("Koch: Akimashita! Ein Platz an der Theke ist frei."))
+			events.append(["greet"])
+	if p.hp >= run.max_hp:
+		for r: Dictionary in ramen:
+			r["t"] = 0.0
+		return
+	for r: Dictionary in ramen:
+		if r["used"]:
+			r["t"] = 0.0
+			continue
+		if absf(p.x - r["x"]) < Config.RAMEN_RANGE and p.depth < 0.6 and p.z <= 0.0:
+			r["t"] += dt
+			if r["t"] >= Config.RAMEN_TIME:
+				r["used"] = true
+				p.hp = mini(run.max_hp, p.hp + 1)
+				run.hp = p.hp
+				events.append(["ramen"])
+				floater(_tr("RAMEN  +1 ♥"), p, [255, 138, 44], 2.2)
+				_say(_tr("Am Nudelstand gestärkt: +1 Integrität."))
+		else:
+			r["t"] = maxf(0.0, r["t"] - dt)
+
+
+# ------------------------------------------------------------------ Origami
+## Eine gefaltete Figur pro Zone (eigener Zufallsstrom - ändert sonst nichts).
+func _place_origami() -> Array:
+	var orng := PyRandom.new(seed * 977 + zone_index * 31 + 5)
+	var kn: Array = DSim.ORIGAMI[Py.imod(zone_index, DSim.ORIGAMI.size())]
+	for _i in 40:
+		var x := orng.uniform(0.15, 0.92) * length
+		var band: Array = orng.choice(Config.OBSTACLE_BANDS)
+		var d := orng.uniform(band[0], band[1])
+		var bad := false
+		for o: Dictionary in obstacles:
+			if absf(x - o["x"]) < o["w"] + 20 and absf(d - o["d"]) < o["dd"] + 0.05:
+				bad = true
+				break
+		if bad:
+			continue
+		for r: Dictionary in ramen:
+			if absf(x - r["x"]) < 70:
+				bad = true
+				break
+		if bad:
+			continue
+		return [{"x": x, "depth": d, "kind": kn[0], "name": kn[1], "taken": false, "seed": orng.randint(0, 999)}]
+	return []
+
+
+func _update_origami() -> void:
+	var p := player
+	for o: Dictionary in origami:
+		if o["taken"] or absf(p.x - o["x"]) > 11.0 or absf(p.depth - o["depth"]) > 0.065:
+			continue
+		o["taken"] = true
+		stats["origami"] = true
+		run.origami.append(o["name"])
+		run.score += Config.POINTS_ORIGAMI
+		stats["score"] += Config.POINTS_ORIGAMI
+		scan_charges = float(scan_max)
+		floater(_tr("ORIGAMI: {}  +{}", [_tr(o["name"]), Config.POINTS_ORIGAMI]), p, [214, 220, 226], 2.6)
+		_say(_tr("Gaff war hier. Scanner wieder voll geladen."))
+		events.append(["origami"])
+
+
+# ------------------------------------------------------------------ Endboss ROY
+func _spawn_boss() -> void:
+	var look := Looks.random_look(rng, 900)
+	look.merge({"outfit": "long", "head": "short", "umbrella": null, "hair": [214, 220, 226],
+			"coat": [22, 22, 28], "coat_name": "schwarz", "collar": true, "bag": null,
+			"wf": 1.12, "hf": 1.07, "cig": false, "led": false, "mask": false, "old": false}, true)
+	var b := Actor.new(minf(length - 70.0, player.x + 120.0), player.depth, {
+		"look": look, "uid": 900, "is_replicant": true, "facing": -1, "speed": 24.0,
+		"phase": 0.0, "target_depth": player.depth})
+	b.hp = Config.ROY_HP
+	b.aggressive = true
+	b.boss = true
+	b.name = "ROY"
+	b.state = "idle"
+	b.timer = 99.0
+	b.boss_invuln = true
+	actors.append(b)
+	boss = b
+	boss_spawned = true
+	boss_line = 0
+	boss_hits = 0
+	boss_speak_t = Config.ROY_SPEAK_S + 0.8
+	events.append(["boss"])
+	target = b
+	manual_target = true
+
+
+func _update_boss(dt: float) -> void:
+	if zone_index != 4 or state != "playing":
+		return
+	if not boss_spawned:
+		# ROY tritt erst auf, wenn der Auftrag in Tyrell erledigt ist (Quote erfüllt)
+		if stats["reps"] >= quota and player.x > length - Config.ROY_TRIGGER:
+			_spawn_boss()
+		return
+	var b := boss
+	if b == null or not b.alive:
+		return
+	if boss_speak_t > 0.0:            # während der Rede: stehen, unverwundbar
+		boss_speak_t -= dt
+		b.boss_invuln = true
+		b.state = "idle"
+		b.vx = 0.0
+		b.timer = 99.0
+		b.facing = 1 if player.x >= b.x else -1
+		if boss_speak_t <= 0.0:
+			boss_speak_t = 0.0
+	else:
+		b.boss_invuln = false
+		if not (b.state in ["attack", "punch", "leap"]):   # nach der Rede angreifen
+			b.alert = true
+			b.aggressive = true
+			b.state = "attack"
+			b.timer = 99.0
+
+
+# ------------------------------------------------------------------ Stromausfall
+func _update_blackout(dt: float) -> void:
+	if blackout_at != null and time >= float(blackout_at):
+		blackout_at = null
+		blackout_t = 9.0
+		events.append(["blackout"])
+		_say(_tr("Stromausfall! Im Dunkeln leuchten Replikantenaugen."))
+	if blackout_t > 0.0:
+		blackout_t -= dt
+		if blackout_t <= 0.0:
+			blackout_t = 0.0
+			events.append(["blackout_end"])
+
+
+func _fail(reason: String) -> void:
+	if state != "playing":
+		return
+	state = "failed"
+	fail_reason = reason
+	if reason == "hp":
+		player.alive = false
+		player.state = "dead"
+		player.dead_t = 0.0
+	events.append(["fail", reason])
+
+# --- TEIL5 ---
