@@ -6,6 +6,17 @@ var dir := ""
 var frame := 0
 var results: Array = []
 var _last_drawn := -1
+var data: Dictionary
+var looks: Array
+
+
+func _bake(i0: int, i1: int) -> void:
+	for i in range(i0, i1):
+		var c: Dictionary = data["cases"][i]
+		var lk: Dictionary = looks[int(c["look"])]
+		var r: Array = Sprites.get_(lk, c["anim"], int(c["frame"]), float(c["h"]), int(c["facing"]), c["rim"],
+			int(c["rim_side"]), c["fog_rgb"], float(c["fog"]))
+		results.append(r)
 
 
 func _ready() -> void:
@@ -15,13 +26,10 @@ func _ready() -> void:
 	var baker := Baker.new()
 	add_child(baker)
 	Sprites.baker = baker
-	var data: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(dir + "/cases.json"))
-	var looks: Array = data["looks"]
-	for c: Dictionary in data["cases"]:
-		var lk: Dictionary = looks[int(c["look"])]
-		var r: Array = Sprites.get_(lk, c["anim"], int(c["frame"]), float(c["h"]), int(c["facing"]), c["rim"],
-			int(c["rim_side"]), c["fog_rgb"], float(c["fog"]))
-		results.append(r)
+	data = JSON.parse_string(FileAccess.get_file_as_string(dir + "/cases.json"))
+	looks = data["looks"]
+	# erste Hälfte jetzt, zweite in einem späteren Frame (prüft Freigabe + Weiterzeichnen)
+	_bake(0, (data["cases"] as Array).size() / 2)
 	# Cache-Treffer muss dasselbe Array liefern
 	var c0: Dictionary = data["cases"][0]
 	var again: Array = Sprites.get_(looks[int(c0["look"])], c0["anim"], int(c0["frame"]), float(c0["h"]),
@@ -42,10 +50,15 @@ func _process(_d: float) -> void:
 		RenderingServer.force_draw(false)
 	_last_drawn = Engine.get_frames_drawn()
 	frame += 1
-	if frame < 6:
+	if OS.get_cmdline_user_args().has("--trace"):
+		print("f", frame, " post_draw=", Sprites._drawn, " drawn=", Engine.get_frames_drawn())
+	if frame == 3:
+		_bake(results.size(), (data["cases"] as Array).size())
+	if frame < 8:
 		return
-	var raw_img: Image = Sprites._raw.texture().get_image()
-	var fin_img: Image = Sprites._fin.texture().get_image()
+	var gen: Variant = Sprites._gens[Sprites._cur]
+	var raw_img: Image = (gen.raw as Baker.Atlas).texture().get_image()
+	var fin_img: Image = (gen.fin as Baker.Atlas).texture().get_image()
 	if OS.get_cmdline_user_args().has("--atlas"):
 		raw_img.save_png(dir + "/atlas_raw.png")
 		fin_img.save_png(dir + "/atlas_fin.png")

@@ -6,10 +6,11 @@ extends RefCounted
 ## Pose analytisch aus (Animation, Phase), gezeichnet mit QP ohne Kantenglättung
 ## direkt in Zielgröße. Danach Umriss + Rimlight + Nebel (_postprocess).
 ##
-## Cache = zwei Atlanten des Bakers (Sprites.baker muss vom Spiel gesetzt sein):
-##   _raw  rohe Figur + Leuchtbild (emit)
-##   _fin  fertiges Bild (Umriss/Rim/Nebel), liest aus _raw -> wird NACH _raw
-##         angelegt und damit im selben Frame danach gerendert.
+## Cache = Atlas-Paare des Bakers (Sprites.baker muss vom Spiel gesetzt sein):
+##   raw  rohe Figur + Leuchtbild (emit)
+##   fin  fertiges Bild (Umriss/Rim/Nebel), liest aus raw -> wird NACH raw
+##        angelegt und damit im selben Frame danach gerendert.
+## Zwei Paare im Wechsel: ist eines voll, wird das andere geleert (s. _swap).
 ## Tabellen kommen aus DSprites (tools/export_data.py).
 
 const PI_ := DSprites.PI
@@ -27,13 +28,12 @@ static var baker: Baker
 static var atlas_size := 2048
 
 static var _CACHE := {}
-static var _raw: Baker.Atlas
-static var _fin: Baker.Atlas
+static var _gens: Array = []          # zwei _Gen im Wechsel (voll -> andere leeren, alte bleibt im Frame gültig)
+static var _cur := 0
+static var _drawn := 0                # gezählte RenderingServer.frame_post_draw
 static var _dummy: QP                 # schluckt Leuchtteile, wenn kein emit gebraucht wird
 static var _dummy_root := RID()
-static var _fx_used: Array[RID] = []  # Postprocess-Items, warten auf den Atlas-Render
 static var _fx_pool: Array[RID] = []
-static var _fx_draw_index := 0
 static var _mats := {}                # m -> ShaderMaterial
 ## Versatz der Formen im Zielraum (s. _SP); veränderbar für Tests.
 static var shape_eps := 1.0 / 128.0
@@ -47,13 +47,26 @@ class _SP extends QP:
 		return Transform2D(xf.x, xf.y, xf.origin + Vector2(Sprites.shape_eps, Sprites.shape_eps))
 
 
-## Wie Baker.Atlas.painter_for, aber mit _SP.
-static func _painter_for(a: Baker.Atlas, r: Rect2i) -> QP:
-	var p := _SP.new(a.host.get_canvas_item())
+## Ein Atlas-Paar: raw (rohe Figur + emit) und fin (fertiges Bild, liest raw).
+## Eigene Buchführung statt Atlas.frame_start: Godot setzt render_target_update_mode
+## nach UPDATE_ONCE nicht auf DISABLED zurück, frame_start gibt daher nie frei und
+## jedes commit() würde alle alten Painter erneut zeichnen.
+class _Gen:
+	var raw: Baker.Atlas
+	var fin: Baker.Atlas
+	var painters: Array = []          # QP, bis zum Render des Atlas
+	var fx: Array[RID] = []           # Postprocess-Items, bis zum Render des Atlas
+	var commit_drawn := -1            # Sprites._drawn beim commit (-1 = nichts offen)
+	var draw_index := 0
+
+
+## Wie Baker.Atlas.painter_for, aber mit _SP und eigener Freigabeliste.
+static func _painter_for(g: _Gen, r: Rect2i) -> QP:
+	var p := _SP.new(g.raw.host.get_canvas_item())
 	p.begin()
 	p.set_clip_rect(r.position.x, r.position.y, r.size.x, r.size.y)
 	p.translate(r.position.x, r.position.y)
-	a._pending.append(p)
+	g.painters.append(p)
 	return p
 
 
@@ -750,42 +763,71 @@ static func _mat(m: float) -> ShaderMaterial:
 
 
 static func _ensure() -> void:
-	if _raw != null:
+	if _dummy != null:
 		return
 	assert(baker != null, "Sprites.baker muss gesetzt sein")
-	_raw = baker.make_atlas(atlas_size)
-	_fin = baker.make_atlas(atlas_size)     # nach _raw angelegt -> rendert danach
 	_dummy_root = RenderingServer.canvas_item_create()
 	_dummy = _SP.new(_dummy_root)
+	RenderingServer.frame_post_draw.connect(_on_post_draw)
 
 
-## Postprocess-Items freigeben, sobald der Atlas sie gerendert hat.
-static func _fx_frame_start() -> void:
-	if _fx_used.is_empty() or _fin.vp.render_target_update_mode != SubViewport.UPDATE_DISABLED:
+static func _on_post_draw() -> void:
+	_drawn += 1
+
+
+static func _gen() -> _Gen:
+	while _gens.size() <= _cur:
+		var g := _Gen.new()
+		g.raw = baker.make_atlas(atlas_size)
+		g.fin = baker.make_atlas(atlas_size)     # nach raw angelegt -> rendert danach
+		_gens.append(g)
+	return _gens[_cur]
+
+
+## Painter/Items freigeben, sobald der Atlas nach dem letzten commit gerendert wurde.
+static func _settle(g: _Gen) -> void:
+	if g.commit_drawn < 0 or _drawn <= g.commit_drawn:
 		return
-	_fx_release()
+	_release(g)
+	g.raw.vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
+	g.fin.vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
 
 
-static func _fx_release() -> void:
-	for it in _fx_used:
+static func _release(g: _Gen) -> void:
+	for p: QP in g.painters:
+		p.end()
+		p.free_all()
+	g.painters.clear()
+	for it in g.fx:
 		RenderingServer.canvas_item_clear(it)
 		RenderingServer.canvas_item_set_visible(it, false)
 		_fx_pool.append(it)
-	_fx_used.clear()
-	_fx_draw_index = 0
+	g.fx.clear()
+	g.draw_index = 0
+	g.commit_drawn = -1
 
 
-static func _fx_item(mat: ShaderMaterial, clip: Rect2) -> RID:
+## Cache leeren = auf das andere Atlas-Paar wechseln und dieses leeren.
+static func _swap() -> void:
+	_CACHE.clear()
+	_cur = 1 - _cur
+	var g := _gen()
+	_release(g)
+	g.raw.reset()
+	g.fin.reset()
+
+
+static func _fx_item(g: _Gen, mat: ShaderMaterial, clip: Rect2) -> RID:
 	var it: RID
 	if _fx_pool.is_empty():
 		it = RenderingServer.canvas_item_create()
 	else:
 		it = _fx_pool.pop_back()
-	_fx_used.append(it)
-	RenderingServer.canvas_item_set_parent(it, _fin.host.get_canvas_item())
+	g.fx.append(it)
+	RenderingServer.canvas_item_set_parent(it, g.fin.host.get_canvas_item())
 	RenderingServer.canvas_item_set_visible(it, true)
-	RenderingServer.canvas_item_set_draw_index(it, 100000 + _fx_draw_index)
-	_fx_draw_index += 1
+	RenderingServer.canvas_item_set_draw_index(it, 100000 + g.draw_index)
+	g.draw_index += 1
 	RenderingServer.canvas_item_set_material(it, mat.get_rid())
 	RenderingServer.canvas_item_set_default_texture_filter(it, RenderingServer.CANVAS_ITEM_TEXTURE_FILTER_NEAREST)
 	RenderingServer.canvas_item_set_custom_rect(it, true, clip)
@@ -793,8 +835,8 @@ static func _fx_item(mat: ShaderMaterial, clip: Rect2) -> RID:
 	return it
 
 
-## Umriss + Rimlight + Nebel: liest das rohe Bild img (Atlas _raw) und schreibt
-## das Ergebnis in den Bereich dst des Atlas _fin. Rückgabe: fertiges Bild.
+## Umriss + Rimlight + Nebel: liest das rohe Bild img (Atlas raw) und schreibt
+## das Ergebnis in den Bereich dst des Atlas fin der aktuellen Generation.
 static func _postprocess(img: QImg, dst: Rect2i, rim_rgb: Variant, rim_side: int, fog_rgb: Array, fog: float,
 		outline: Array = [4, 5, 10]) -> QImg:
 	var f := float(int(255 * fog)) / 255.0 if fog > 0.0 else 0.0
@@ -804,7 +846,8 @@ static func _postprocess(img: QImg, dst: Rect2i, rim_rgb: Variant, rim_side: int
 	var clip := Rect2(dst)
 	var size := Vector2(dst.size)
 	var pos := Vector2(dst.position)
-	var mk := _fx_item(_mat(0.0), clip)
+	var g := _gen()
+	var mk := _fx_item(g, _mat(0.0), clip)
 	var mask := func(rgb: Array, alpha: float, d: Vector2) -> void:
 		var a := alpha / 255.0
 		var c := Color(float(rgb[0]) / 255.0, float(rgb[1]) / 255.0, float(rgb[2]) / 255.0)
@@ -816,34 +859,34 @@ static func _postprocess(img: QImg, dst: Rect2i, rim_rgb: Variant, rim_side: int
 	if rim_rgb != null:
 		mask.call(rim_rgb, 235.0, Vector2(rim_side, 0))
 		mask.call(_mul(rim_rgb, 0.6), 160.0, Vector2(0, -1))
-	var fi := _fx_item(_mat(1.0 - f), clip)
+	var fi := _fx_item(g, _mat(1.0 - f), clip)
 	RenderingServer.canvas_item_add_texture_rect_region(fi, Rect2(pos, size), tex, src,
 		Color(fogc.r * f, fogc.g * f, fogc.b * f, 1.0), false, true)
-	return QImg.new(_fin.texture(), clip)
+	return QImg.new(g.fin.texture(), clip)
 
 
 static func frame_count(anim: String) -> int:
 	return int(ANIMS.get(anim, 1))
 
 
-## Alles verwerfen (Atlanten voll oder Zonenwechsel).
+## Alles verwerfen (wie _CACHE.clear(), z. B. beim Zonenwechsel).
 static func clear_cache() -> void:
-	_CACHE.clear()
-	if _raw != null:
-		_fx_release()
-		_raw.reset()
-		_fin.reset()
+	if _dummy == null:
+		_CACHE.clear()
+		return
+	_swap()
 
 
 static func _alloc(w: int, h: int, emit_used: bool) -> Array:
-	# [raw, emit|null, fin] - bei vollem Atlas einmal alles verwerfen
+	# [raw, emit|null, fin] - bei vollem Atlas auf das andere Paar wechseln
 	for attempt in 2:
-		var r: Variant = _raw.alloc(w, h)
-		var re: Variant = _raw.alloc(w, h) if emit_used and r != null else Rect2i()
-		var rf: Variant = _fin.alloc(w, h)
+		var g := _gen()
+		var r: Variant = g.raw.alloc(w, h)
+		var re: Variant = g.raw.alloc(w, h) if emit_used and r != null else Rect2i()
+		var rf: Variant = g.fin.alloc(w, h)
 		if r != null and re != null and rf != null:
 			return [r, re if emit_used else null, rf]
-		clear_cache()
+		_swap()
 	return []
 
 
@@ -859,11 +902,10 @@ static func get_(look: Dictionary, anim: String, frame: int, height_px: float, f
 	if hit != null:
 		return hit
 	_ensure()
+	for gg: _Gen in _gens:
+		_settle(gg)
 	if _CACHE.size() > _CACHE_MAX:     # wie _CACHE.clear() im Original, aber vor dem Zeichnen
-		clear_cache()
-	_raw.frame_start()
-	_fin.frame_start()
-	_fx_frame_start()
+		_swap()
 
 	var k := hpx / 48.0
 	var left := 60.0 if anim == "die" else _PAD
@@ -885,11 +927,12 @@ static func get_(look: Dictionary, anim: String, frame: int, height_px: float, f
 	var slots := _alloc(W, H, emit_used)
 	if slots.is_empty():
 		return [null, null, ax, ay, {}]
+	var g := _gen()
 	var r: Rect2i = slots[0]
-	var p := _painter_for(_raw, r)
+	var p := _painter_for(g, r)
 	var pe: QP
 	if emit_used:
-		pe = _painter_for(_raw, slots[1])
+		pe = _painter_for(g, slots[1])
 	else:
 		_dummy.begin()
 		pe = _dummy
@@ -910,15 +953,16 @@ static func get_(look: Dictionary, anim: String, frame: int, height_px: float, f
 		_fallen_umbrella(p, pe, look)
 	if not emit_used:
 		_dummy.end()
-	_raw.commit()
+	g.raw.commit()
 
 	var org := Vector2(r.position)
 	var e_pt := tr_ * (res[0] as Vector2) - org
 	var h_pt := tr_ * (res[2] as Vector2) - org
 	var c_pt := tr_ * (res[1] as Vector2) - org
-	var out := _postprocess(QImg.new(_raw.texture(), Rect2(r)), slots[2], rim, rim_side, fog_rgb, fogq, outline)
-	_fin.commit()
-	var emit: Variant = QImg.new(_raw.texture(), Rect2(slots[1] as Rect2i)) if emit_used else null
+	var out := _postprocess(QImg.new(g.raw.texture(), Rect2(r)), slots[2], rim, rim_side, fog_rgb, fogq, outline)
+	g.fin.commit()
+	g.commit_drawn = _drawn
+	var emit: Variant = QImg.new(g.raw.texture(), Rect2(slots[1] as Rect2i)) if emit_used else null
 	if facing < 0:
 		out = out.mirror()
 		if emit != null:
