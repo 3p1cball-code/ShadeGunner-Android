@@ -79,6 +79,13 @@ func _process(_d: float) -> void:
 	for old: Array in Holo._TMP.values():
 		Holo._free_tex(old[1])
 	Holo._TMP.clear()
+	# Textur zuerst anlegen (aktivieren): Godot rendert Geschwister-Viewports in
+	# Aktivierungsreihenfolge - sonst käme sie erst nach den Testbildern dran.
+	var dummy := QP.new(RenderingServer.canvas_item_create())
+	dummy.begin()
+	Holo.render(dummy, dummy, float(c["x"]), float(c["base"]), float(c["h"]), c["col"], float(c["t"]),
+		int(c["seed"]), float(c["reflect"]), 0.62, bool(c["mirror"]))
+	dummy.end()
 	vps = [_vp(), _vp()]
 	Holo.render(vps[0][1], vps[1][1], float(c["x"]), float(c["base"]), float(c["h"]), c["col"], float(c["t"]),
 		int(c["seed"]), float(c["reflect"]), 0.62, bool(c["mirror"]))
