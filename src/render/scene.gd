@@ -1409,18 +1409,239 @@ func _street(p: QP, e: QP, cam: float, t: float) -> void:
 			Vector2(x + 10, fy + 120), Vector2(x - 10, fy + 120)]))
 	p.set_mode(OVER)
 	fx.draw_splashes(p, Scene.mix(city.th["fog"], DScene.PALE, 0.5))
-func _rim_for(_a: Variant, _cam: float) -> Variant:
-	return null
-func _mirror(_img: QImg) -> Variant:
-	return null
-func _actors(_pa: QP, _ea: QP, _world: Variant, _cam: float, _t: float, _show_player: bool) -> void:
-	pass
-func _draw_actor(_pa: QP, _ea: QP, _a: Variant, _cam: float, _t: float, _lit: bool = false) -> void:
-	pass
-func _glints(_pa: QP, _ea: QP, _world: Variant, _cam: float, _boost: bool = false) -> void:
-	pass
-func _flashlight(_pa: QP, _ea: QP, _world: Variant, _cam: float) -> void:
-	pass
+# ------------------------------------------------------------------ Figuren
+func _rim_for(a: Variant, _cam: float) -> Array:
+	var best: Variant = null
+	var bd := 110.0
+	for lamp: City.Lamp in city.lamps:
+		var d := absf(lamp.x - float(a.x))
+		if d < bd:
+			best = lamp
+			bd = d
+	if best != null:
+		var bl: City.Lamp = best
+		var side := 1 if bl.x + 6 >= float(a.x) else -1
+		return [bl.color, side]
+	return [city.th["rim"], 1]
+
+
+## Wet-Street-Reflexion (progressiv scharf->weich, city.soft_reflection).
+## Einmal pro Sprite gerechnet und gecacht - Rendern kostet nur ein drawImage.
+func _mirror(im: QImg) -> QImg:
+	var r: Variant = _refl.get(im)
+	if r == null:
+		if _refl.size() > 6000:
+			_refl.clear()
+		r = City.soft_reflection(im)
+		_refl[im] = r
+	return r
+
+
+## Figuren, Fahrzeuge und Hindernisse gemeinsam nach Tiefe sortiert.
+func _actors(p: QP, e: QP, world: Variant, cam: float, t: float, show_player: bool) -> void:
+	screen = {}
+	var items: Array = []
+	var idx := 0
+	for a: Variant in world.actors:
+		if not a.escaped and (show_player or not a.player):
+			items.append([float(a.depth) if a.alive else float(a.depth) - 0.002, 0, a, idx])
+			idx += 1
+	for v: Variant in world.vehicles:
+		items.append([float(v["depth"]) - 0.001, 1, v, idx])
+		idx += 1
+	for o: Variant in world.obstacles:
+		if not (o["kind"] in ["spinner", "stack"]):
+			items.append([float(o["d"]) + float(o["dd"]) * 0.5, 2, o, idx])
+			idx += 1
+	for m: Variant in world.manholes:
+		items.append([float(m["d"]) + 0.012, 5, m, idx])
+		idx += 1
+	var patrol: Variant = world.patrol
+	if patrol != null and float(patrol.get("alt", 1.0)) < 1.0:
+		items.append([Config.LAND_DEPTH, 3, patrol, idx])
+		idx += 1
+	for o: Variant in world.origami:
+		if not o["taken"]:
+			items.append([float(o["depth"]), 4, o, idx])
+			idx += 1
+	items.sort_custom(func(x: Array, y: Array) -> bool:
+		if x[0] == y[0]:
+			return x[3] < y[3]
+		return x[0] < y[0])
+	for it: Array in items:
+		var kind: int = it[1]
+		var obj: Variant = it[2]
+		if kind == 0:
+			var lit: bool = patrol != null and float(patrol["on"]) > 0.3 and world.in_beam(obj)
+			_draw_actor(p, e, obj, cam, t, lit)
+		elif kind == 1:
+			_draw_vehicle(p, e, obj, cam, t)
+		elif kind == 2:
+			_draw_obstacle(p, e, obj, cam, t)
+		elif kind == 3:
+			_draw_landing(p, e, obj, cam, t)
+		elif kind == 5:
+			_draw_steam(p, e, obj, cam, t)
+		else:
+			_draw_origami(p, e, obj, cam, t)
+
+
+func _draw_actor(p: QP, e: QP, a: Variant, cam: float, t: float, lit: bool = false) -> void:
+	var th: Dictionary = city.th
+	var fog_rgb: Array = th["fog"]
+	var cx := Persp.screen_x(float(a.x), float(a.depth), cam)
+	var hgt := Persp.figure_h(float(a.depth)) * float(a.look.get("hf", 1.0))
+	if cx < -hgt * 1.4 or cx > W + hgt * 1.4:
+		return
+	var gy := Persp.ground_y(float(a.depth))
+	var lift := int(Py.round(float(a.z) * Persp.ppu(float(a.depth))))
+	var fog := float(th["fog_amt"]) * 0.85 * pow(1.0 - float(a.depth), 1.6)
+	var rim_side: Array = _rim_for(a, cam)
+	var rim: Array = rim_side[0]
+	var side: int = rim_side[1]
+	if a.player:
+		rim = DScene.CYAN
+		fog = 0.0
+	if not a.alive:
+		# Liegende Körper: kein Nebel, kühles Oberlicht -> heben sich vom nassen Asphalt ab
+		rim = [200, 210, 232]
+		fog = 0.0
+		side = 1
+	if lit:
+		rim = DScene.WHITE
+		fog = 0.0
+	var outline := [4, 5, 10]
+	if not a.alive and float(a.dead_t) > 0.5:
+		# „Kreide“-Umriss: liegende Körper bleiben auf dem nassen Asphalt lesbar
+		outline = [150, 40, 64] if not a.is_replicant else [120, 170, 190]
+	var r: Array = Sprites.get_(a.look, a.anim, int(a.get("frame")), hgt, int(a.facing),
+		rim, side * int(a.facing), fog_rgb, fog, outline)
+	var im: QImg = r[0]
+	var em: QImg = r[1]
+	var ax: int = r[2]
+	var ay: int = r[3]
+	var meta: Dictionary = r[4]
+	var x0 := int(cx) - ax
+	var y0 := int(gy) - ay - lift
+	if not a.alive:
+		# Lache: Menschen dunkelrot, Replikanten milchig-weiß
+		var k := minf(1.0, float(a.dead_t) / 2.5)
+		if k > 0.05:
+			var rw := hgt * (0.3 + 0.6 * k)
+			var px_ := cx + (meta["head"] as Vector2).x * 0.55 - rw / 2
+			var cc: Array
+			var hl: Array
+			if not a.is_replicant:
+				cc = [150, 24, 50]
+				hl = [220, 70, 96]
+			else:
+				cc = [176, 192, 206]
+				hl = [240, 248, 255]
+			p.set_no_pen()
+			p.set_brush(QP.rgb(cc, 225))
+			p.draw_ellipse(px_, gy - rw * 0.08, rw, rw * 0.2)
+			p.fill_rect(int(px_ + rw * 0.3), int(gy - rw * 0.04), maxi(1, int(rw * 0.3)), 1, QP.rgb(hl))
+		p.draw_image_at(x0, y0, im)
+		p.set_mode(PLUS)
+		p.set_opacity(0.22)
+		p.draw_image_at(x0, y0, im)
+		p.set_opacity(1.0)
+		p.set_mode(OVER)
+		if em != null:
+			e.draw_image_at(x0, y0, em)
+		screen[a.uid] = [cx, gy, hgt, meta]
+		return
+	# Schatten (bleibt am Boden, schrumpft beim Sprung)
+	var sw := hgt * 0.42 * maxf(0.45, 1.0 - float(a.z) / 40.0)
+	p.set_no_pen()
+	p.set_brush(QP.c(0, 0, 0, 110))
+	p.draw_ellipse(cx - sw / 2, gy - sw * 0.07, sw, sw * 0.16)
+	# Spiegelbild im nassen Asphalt
+	p.set_opacity(minf(1.0, 0.46 * _reflk))
+	p.draw_image_at(x0, int(gy) + lift - (im.height() - 1 - ay), _mirror(im))
+	p.set_opacity(1.0)
+	if a.player:
+		var rw := hgt * 0.5
+		for qa: Array in [[p, 120], [e, 90]]:
+			var q: QP = qa[0]
+			var al: int = qa[1]
+			q.set_pen(QP.c(64, 210, 220, al), 1)
+			q.set_no_brush()
+			q.draw_ellipse(cx - rw / 2, gy - rw * 0.1, rw, rw * 0.2)
+	p.draw_image_at(x0, y0, im)
+	if em != null:
+		e.draw_image_at(x0, y0, em)
+	if lit:
+		p.set_mode(PLUS)
+		p.set_opacity(0.28)
+		p.draw_image_at(x0, y0, im)
+		p.set_opacity(1.0)
+		p.set_mode(OVER)
+	if float(a.flash_t) > 0:
+		p.set_mode(PLUS)
+		p.set_opacity(minf(1.0, float(a.flash_t) * 4))
+		p.draw_image_at(x0, y0, im)
+		p.draw_image_at(x0, y0, im)
+		p.set_opacity(1.0)
+		p.set_mode(OVER)
+	if a.player and float(a.invuln) > 0 and Py.imod(int(t * 16), 2) == 0:
+		p.set_opacity(0.5)
+		p.draw_image_at(x0, y0, im)
+		p.set_opacity(1.0)
+	if float(a.glint_t) > 0 and dark <= 0:
+		var eye: Vector2 = meta["eye"]
+		var gx := int(cx + eye.x)
+		var gy2 := int(gy + eye.y) - lift
+		for q: QP in [p, e]:
+			q.fill_rect(gx, gy2, 2, 1, QP.rgb(DScene.AMBER))
+			q.fill_rect(gx, gy2, 1, 1, QP.rgb([255, 230, 180]))
+	screen[a.uid] = [cx, gy - lift, hgt, meta]
+
+
+## Augenreflexe über dem Stromausfall-Schleier: die Replikantenaugen glühen.
+func _glints(p: QP, e: QP, world: Variant, _cam: float, _boost: bool = false) -> void:
+	for a: Variant in world.actors:
+		if a.player or not a.alive or a.escaped or float(a.glint_t) <= 0:
+			continue
+		var sc: Variant = screen.get(a.uid)
+		if sc == null:
+			continue
+		var arr: Array = sc
+		var cx: float = arr[0]
+		var gy: float = arr[1]
+		var meta: Dictionary = arr[3]
+		var eye: Vector2 = meta["eye"]
+		var gx := int(cx + eye.x)
+		var gy2 := int(gy + eye.y)
+		p.fill_rect(gx - 1, gy2, 3, 1, QP.rgb(DScene.AMBER))
+		p.fill_rect(gx, gy2, 1, 1, QP.rgb(DScene.WHITE))
+		e.fill_rect(gx - 2, gy2 - 1, 5, 3, QP.rgb(DScene.AMBER))
+
+
+## Taschenlampe des Blade Runners im Stromausfall.
+func _flashlight(p: QP, _ee: QP, world: Variant, _cam: float) -> void:
+	var pl: Variant = world.player
+	var sc: Variant = screen.get(pl.uid)
+	if sc == null or not pl.alive:
+		return
+	var arr: Array = sc
+	var cx: float = arr[0]
+	var gy: float = arr[1]
+	var hgt: float = arr[2]
+	var d: int = pl.facing
+	var hx := cx + d * hgt * 0.12
+	var hy := gy - hgt * 0.55
+	var ln := 170.0 * dark
+	var tx := hx + d * ln
+	p.set_mode(PLUS)
+	var g := QGrad.linear(hx, hy, tx, hy)
+	g.set_color_at(0, QP.c(150, 200, 210, 120))
+	g.set_color_at(1, QP.c(0, 0, 0, 0))
+	p.set_no_pen()
+	p.set_brush(g)
+	p.draw_polygon(PackedVector2Array([Vector2(hx, hy - 1), Vector2(tx, hy - hgt * 0.7),
+		Vector2(tx, gy + hgt * 0.15), Vector2(hx, hy + 1)]))
+	p.set_mode(OVER)
 func _draw_vehicle(_pa: QP, _ea: QP, _v: Variant, _cam: float, _t: float) -> void:
 	pass
 func _vehicle_lights(_pa: QP, _ea: QP, _world: Variant, _cam: float, _t: float) -> void:
