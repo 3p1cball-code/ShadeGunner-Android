@@ -1642,18 +1642,318 @@ func _flashlight(p: QP, _ee: QP, world: Variant, _cam: float) -> void:
 	p.draw_polygon(PackedVector2Array([Vector2(hx, hy - 1), Vector2(tx, hy - hgt * 0.7),
 		Vector2(tx, gy + hgt * 0.15), Vector2(hx, hy + 1)]))
 	p.set_mode(OVER)
-func _draw_vehicle(_pa: QP, _ea: QP, _v: Variant, _cam: float, _t: float) -> void:
-	pass
-func _vehicle_lights(_pa: QP, _ea: QP, _world: Variant, _cam: float, _t: float) -> void:
-	pass
-func _draw_origami(_pa: QP, _ea: QP, _o: Variant, _cam: float, _t: float) -> void:
-	pass
-func _draw_parked(_pa: QP, _ea: QP, _o: Variant, _cam: float, _t: float) -> void:
-	pass
-func _draw_steam(_pa: QP, _ea: QP, _m: Variant, _cam: float, _t: float) -> void:
-	pass
-func _draw_obstacle(_pa: QP, _ea: QP, _o: Variant, _cam: float, _t: float) -> void:
-	pass
+func _draw_vehicle(p: QP, e: QP, v: Dictionary, cam: float, t: float) -> void:
+	var d: float = v["depth"]
+	var k := Persp.ppu(d)
+	var cx := Persp.screen_x(float(v["x"]), d, cam)
+	if cx < -float(v["L"]) * k or cx > W + float(v["L"]) * k:
+		return
+	var gy := Persp.ground_y(d)
+	var r: Array = Vehicles.vehicle_image(v["kind"], v["seed"], k, city.th["rim"], v["dir"])
+	var im: QImg = r[0]
+	@warning_ignore("unused_variable")
+	var em: QImg = r[1]
+	var ax: int = r[2]
+	var ay: int = r[3]
+	var x0 := int(cx) - ax
+	var y0 := int(gy) - ay
+	p.set_no_pen()
+	p.set_brush(QP.c(0, 0, 0, 130))
+	p.draw_ellipse(cx - float(v["L"]) * k * 0.55, gy - 3 * k, float(v["L"]) * k * 1.1, 5 * k)
+	p.set_opacity(minf(1.0, 0.5 * _reflk))
+	p.draw_image_at(x0, int(gy) - (im.height() - 1 - ay), _mirror(im))
+	p.set_opacity(1.0)
+	p.draw_image_at(x0, y0, im)
+	e.draw_image_at(x0, y0, em)
+	if v["kind"] == "police":
+		var kk := k * Vehicles.VEH_SCALE
+		_spinner_lights(p, e, cx, gy, kk * 60.0 / Vehicles.SPIN_L, kk, v["dir"], t + float(v["seed"]))
+
+
+## Scheinwerferkegel und Lichtflecken auf der nassen Fahrbahn (additiv).
+func _vehicle_lights(p: QP, _ee: QP, world: Variant, cam: float, _t: float) -> void:
+	var vs: Array = world.vehicles
+	if vs.is_empty():
+		return
+	p.set_mode(PLUS)
+	for v: Dictionary in vs:
+		var d: float = v["depth"]
+		var k := Persp.ppu(d)
+		var cx := Persp.screen_x(float(v["x"]), d, cam)
+		if cx < -300 or cx > W + 300:
+			continue
+		var gy := Persp.ground_y(d)
+		var dr: int = v["dir"]
+		var fx_ := cx + dr * float(v["L"]) * 0.5 * k
+		var hh: float = {"truck": 11.0, "bus": 12.0, "police": 8.4}.get(v["kind"], 9.0)
+		var hy := gy - hh * k * Vehicles.VEH_SCALE
+		Vehicles.headlight(p, fx_, hy, dr, k, gy, 120.0, [255, 240, 210], 80)
+		var rg := QGrad.radial(fx_ + dr * 50 * k, gy, 60 * k)
+		rg.set_color_at(0, QP.c(255, 240, 210, 70))
+		rg.set_color_at(1, QP.c(0, 0, 0, 0))
+		p.save()
+		p.translate(fx_ + dr * 50 * k, gy)
+		p.scale(1.0, 0.25)
+		p.translate(-(fx_ + dr * 50 * k), -gy)
+		p.fill_rect(fx_ + dr * 50 * k - 60 * k, gy - 60 * k, 120 * k, 120 * k, rg)
+		p.restore()
+		# Rücklicht-Schimmer
+		var bx := cx - dr * float(v["L"]) * 0.5 * k
+		var rg2 := QGrad.radial(bx, gy - 7 * k, 16 * k)
+		rg2.set_color_at(0, QP.c(240, 40, 70, 70))
+		rg2.set_color_at(1, QP.c(0, 0, 0, 0))
+		p.fill_rect(bx - 16 * k, gy - 23 * k, 32 * k, 32 * k, rg2)
+	p.set_mode(OVER)
+
+
+# Gaffs Origami: Silhouetten in Welt-Einheiten (Boden y = 0, Blick nach +x)
+const ORIGAMI_SHAPES := {
+	"huhn": [[[-4, 0], [-1, -5], [3, -5], [4, 0]], [[-4, -2], [-6.5, -7], [-2, -4]],
+		[[2, -5], [3.5, -9], [5, -8.5], [4, -5]], [[5, -8.5], [7, -8], [5, -7.6]]],
+	"mann": [[[-0.6, 0], [-0.2, -6], [0.6, -6], [0.2, 0]], [[-3, 0], [-0.4, -5.6], [0.2, -5.2], [-2.2, 0]],
+		[[3, 0], [0.4, -5.6], [-0.2, -5.2], [2.2, 0]], [[-3.4, -6.6], [0, -7.4], [3.4, -6.6], [0, -6.2]],
+		[[-1.2, -8], [0, -9.8], [1.2, -8], [0, -7.2]], [[0.4, -4.4], [3.2, -3.4], [0.4, -3.8]]],
+	"schaf": [[[-4.5, -2.5], [-3, -6.5], [3, -6.5], [4.5, -2.5]], [[-4, -2.5], [-3.4, 0], [-2.8, -2.5]],
+		[[3, -2.5], [3.6, 0], [4.2, -2.5]], [[3.5, -6], [6.5, -7.5], [7, -4.5], [4.5, -4]]],
+	"kranich": [[[-6, -3], [0, -1], [6, -3], [0, -3.6]], [[-1.5, -3.2], [1, -9], [2, -3.2]],
+		[[-6, -3], [-8, -7], [-5, -3.4]], [[6, -3], [8, -7.5], [9, -7], [5, -3.4]]],
+	"einhorn": [[[-4.5, -3], [-3.5, -7], [3.5, -7], [4.5, -3]], [[-4, -3], [-3.6, 0], [-2.8, -3]],
+		[[3, -3], [3.6, 0], [4.2, -3]], [[3, -6.5], [5.5, -10.5], [7, -9.5], [5, -6]],
+		[[6, -10], [9, -14], [6.8, -9.6]], [[-4.5, -6.6], [-7, -4], [-4.4, -5]]],
+}
+
+
+## Gefaltete Papierfigur am Straßenrand; blinkt alle paar Sekunden kurz auf.
+func _draw_origami(p: QP, e: QP, o: Dictionary, cam: float, t: float) -> void:
+	var d: float = o["depth"]
+	var k := Persp.ppu(d) * 1.4
+	var cx := Persp.screen_x(float(o["x"]), d, cam)
+	if cx < -30 or cx > W + 30:
+		return
+	var gy := Persp.ground_y(d)
+	var paper: Array = [200, 210, 230] if o["kind"] == "einhorn" else [220, 222, 228]
+	var fold := Scene.mul(paper, 0.7)
+	p.set_no_pen()
+	p.set_brush(QP.c(0, 0, 0, 110))
+	p.draw_ellipse(cx - 6 * k, gy - 1.2 * k, 12 * k, 2.4 * k)
+	var shapes: Array = ORIGAMI_SHAPES[o["kind"]]
+	for i in range(shapes.size()):
+		var poly: Array = shapes[i]
+		var pts := PackedVector2Array()
+		for pt: Array in poly:
+			pts.append(Vector2(cx + float(pt[0]) * k, gy + float(pt[1]) * k))
+		p.set_brush(QP.rgb(paper if Py.imod(i, 2) == 0 else fold))
+		p.draw_polygon(pts)
+		var pts2 := PackedVector2Array()
+		for pt: Array in poly:
+			pts2.append(Vector2(cx + float(pt[0]) * k, gy - float(pt[1]) * k * 0.8))
+		p.set_opacity(0.35 * _reflk)
+		p.draw_polygon(pts2)
+		p.set_opacity(1.0)
+	# Glanzpunkt: alle ~2,4 s ein kurzer Stern
+	var ph := Py.mod(t + float(o["seed"]) * 0.01, 2.4)
+	if ph < 0.35:
+		var a := 1.0 - ph / 0.35
+		var sy := gy - 9 * k
+		var r := 2 + 5 * a
+		for q: QP in [p, e]:
+			q.fill_rect(cx - r, sy, 2 * r + 1, 1, QP.rgb(DScene.WHITE, int(255 * a)))
+			q.fill_rect(cx, sy - r, 1, 2 * r + 1, QP.rgb(DScene.WHITE, int(255 * a)))
+
+
+## Geparktes Fahrzeug: Motor aus, Lichter fast dunkel, manche mit Warnblinker.
+func _draw_parked(p: QP, e: QP, o: Dictionary, cam: float, t: float) -> void:
+	var d: float = o["d"]
+	var k := Persp.ppu(d)
+	var cx := Persp.screen_x(float(o["x"]), d, cam)
+	if cx < -float(o["w"]) * 2 * k or cx > W + float(o["w"]) * 2 * k:
+		return
+	var gy := Persp.ground_y(d)
+	var r: Array = Vehicles.vehicle_image(o["veh"], o["seed"], k, city.th["rim"], o["dir"])
+	var im: QImg = r[0]
+	var em: QImg = r[1]
+	var ax: int = r[2]
+	var ay: int = r[3]
+	var x0 := int(cx) - ax
+	var y0 := int(gy) - ay
+	p.set_no_pen()
+	p.set_brush(QP.c(0, 0, 0, 140))
+	p.draw_ellipse(cx - float(o["w"]) * k * 1.1, gy - 3 * k, float(o["w"]) * k * 2.2, 5 * k)
+	p.set_opacity(minf(1.0, 0.5 * _reflk))
+	p.draw_image_at(x0, int(gy) - (im.height() - 1 - ay), _mirror(im))
+	p.set_opacity(1.0)
+	p.draw_image_at(x0, y0, im)
+	e.set_opacity(0.12)
+	e.draw_image_at(x0, y0, em)
+	e.set_opacity(1.0)
+	if o["veh"] == "police":
+		var kk := k * Vehicles.VEH_SCALE
+		_spinner_lights(p, e, cx, gy, kk * 60.0 / Vehicles.SPIN_L, kk, o["dir"], t + float(o["seed"]))
+	elif bool(o.get("hazard", false)) and Py.imod(int(t * 1.7 + float(o["seed"]) * 0.01), 2) == 0:
+		var hy := gy - 8 * k
+		for sx: float in [cx - float(o["w"]) * k * 0.92, cx + float(o["w"]) * k * 0.92]:
+			for q: QP in [p, e]:
+				q.fill_rect(sx - 1.2 * k, hy, 2.4 * k + 1, 1.6 * k + 1, QP.rgb(DScene.AMBER))
+			var rg := QGrad.radial(sx, gy, 18 * k)
+			rg.set_color_at(0, QP.c(255, 150, 40, 60))
+			rg.set_color_at(1, QP.c(0, 0, 0, 0))
+			p.set_mode(PLUS)
+			p.fill_rect(sx - 18 * k, gy - 5 * k, 36 * k, 10 * k, rg)
+			p.set_mode(OVER)
+
+
+## Dampfender Gulli (oder gestreifter Dampfschlot): Deckel mit Glut im Spalt,
+## darüber Schwaden, die aufsteigen, wachsen, abdriften und das Neon fangen.
+func _draw_steam(p: QP, e: QP, m: Dictionary, cam: float, t: float) -> void:
+	var d: float = m["d"]
+	var k := Persp.ppu(d)
+	var cx := Persp.screen_x(float(m["x"]), d, cam)
+	if cx < -90 * k or cx > W + 90 * k:
+		return
+	var gy := Persp.ground_y(d)
+	var s: float = m.get("s", 0.5)
+	p.set_no_pen()
+	var src_y := 0.0
+	var rise := 0.0
+	if m["stack"]:
+		# Con-Ed-Schlot: orange-weiß gestreift, schwarze Kappe
+		var sw := 3.6 * k
+		var sh := 14.0 * k
+		p.set_brush(QP.c(0, 0, 0, 120))
+		p.draw_ellipse(cx - sw, gy - 1.5 * k, sw * 2, 3 * k)
+		var n := 6
+		for i in range(n):
+			var col: Array = [232, 104, 34] if Py.imod(i, 2) == 0 else [226, 222, 214]
+			var y0 := gy - sh * (i + 1) / n
+			p.fill_rect(cx - sw / 2, y0, sw, sh / n + 1, QP.rgb(Scene.mul(col, 0.62)))
+			p.fill_rect(cx - sw / 2, y0, sw * 0.35, sh / n + 1, QP.rgb(Scene.mul(col, 0.85)))
+		p.fill_rect(cx - sw / 2 - 0.6 * k, gy - sh - 1.4 * k, sw + 1.2 * k, 1.6 * k, QP.rgb([26, 26, 32]))
+		src_y = gy - sh - 1.0 * k
+		rise = 95.0
+	else:
+		p.set_brush(QP.rgb([14, 14, 20]))
+		p.draw_ellipse(cx - 6.5 * k, gy - 1.3 * k, 13 * k, 2.6 * k)
+		p.set_no_brush()
+		p.set_pen(QP.rgb([70, 72, 86]), maxf(1.0, 0.6 * k))
+		p.draw_ellipse(cx - 6.5 * k, gy - 1.3 * k, 13 * k, 2.6 * k)
+		p.set_no_pen()
+		var glow := int(90 + 80 * s)
+		for q: QP in [p, e]:                                  # Glut in den Löchern
+			for i: int in [-2, 0, 2]:
+				q.fill_rect(cx + i * 1.8 * k - 0.5 * k, gy - 0.3 * k, 1.0 * k + 1, 0.6 * k + 1,
+					QP.c(255, 120, 40, glow))
+		src_y = gy - 0.5 * k
+		rise = 75.0
+	# Bodennebel um den Gulli
+	var tint := Scene.mix([222, 222, 232], city.th["fog"], 0.3)
+	var rg := QGrad.radial(cx, gy, 34 * k)
+	rg.set_color_at(0.0, QP.rgb(tint, int(70 * s)))
+	rg.set_color_at(1.0, QP.c(0, 0, 0, 0))
+	p.save()
+	p.translate(cx, gy)
+	p.scale(1.0, 0.22)
+	p.fill_rect(-34 * k, -34 * k, 68 * k, 68 * k, rg)
+	p.restore()
+	# Schwaden: dichter Strahl an der Quelle, darüber aufsteigende, wachsende Ballen
+	var n2 := 22
+	var side := 1 if Py.imod(m["seed"], 2) else -1
+	var rate := 0.32
+	for i in range(n2):
+		var u := (t + float(m["seed"]) * 0.37) * rate + float(i) / n2
+		var age := Py.mod(u, 1.0)
+		var fade := minf(1.0, age / 0.05) * pow(1.0 - age, 1.6)
+		var a := minf(1.0, s * 1.25) * fade
+		if a < 0.04:
+			continue
+		var hhx := Scene._hash(i * 13 + int(u), m["seed"])
+		var ox := (float(m.get("drift", 0.0)) * age + age * age * (34.0 + 26 * hhx) * side
+			+ sin(age * 6.0 + i * 1.7) * 3.5 * age + (hhx - 0.5) * 4.0 * age)
+		var r2 := (2.2 + 15.0 * pow(age, 0.9) + 3.5 * hhx) * k
+		var px := cx + ox * k
+		var py := src_y - pow(age, 0.8) * rise * k
+		var col2 := Scene.mix(tint, [250, 250, 255], maxf(0.0, 0.5 - age))     # unten heller
+		var rg2 := QGrad.radial(px, py, r2)
+		rg2.set_color_at(0.0, QP.rgb(col2, int(235 * a)))
+		rg2.set_color_at(0.55, QP.rgb(col2, int(150 * a)))
+		rg2.set_color_at(1.0, QP.rgb(col2, 0))
+		p.set_brush(rg2)
+		p.draw_ellipse(px - r2, py - r2 * 0.85, 2 * r2, 1.7 * r2)
+		if age < 0.5:                                 # unten fängt der Dampf das Licht
+			rg2.set_color_at(0.0, QP.rgb(col2, int(34 * a)))
+			rg2.set_color_at(0.55, QP.rgb(col2, int(10 * a)))
+			e.set_brush(rg2)
+			e.set_no_pen()
+			e.draw_ellipse(px - r2, py - r2 * 0.85, 2 * r2, 1.7 * r2)
+
+
+func _draw_obstacle(p: QP, e: QP, o: Dictionary, cam: float, t: float) -> void:
+	if o["kind"] == "parked":
+		_draw_parked(p, e, o, cam, t)
+		return
+	var d: float = o["d"]
+	var k := Persp.ppu(d)
+	var cx := Persp.screen_x(float(o["x"]), d, cam)
+	if cx < -60 or cx > W + 60:
+		return
+	var gy := Persp.ground_y(d)
+	var r: Array = Vehicles.obstacle_image(o["kind"], o["seed"], k, city.th["rim"])
+	var im: QImg = r[0]
+	var em: QImg = r[1]
+	var ax: int = r[2]
+	var ay: int = r[3]
+	var x0 := int(cx) - ax
+	var y0 := int(gy) - ay
+	p.set_no_pen()
+	p.set_brush(QP.c(0, 0, 0, 120))
+	p.draw_ellipse(cx - float(o["w"]) * k * 1.1, gy - 2 * k, float(o["w"]) * k * 2.2, 4 * k)
+	p.set_opacity(minf(1.0, 0.46 * _reflk))
+	p.draw_image_at(x0, int(gy) - (im.height() - 1 - ay), _mirror(im))
+	p.set_opacity(1.0)
+	p.draw_image_at(x0, y0, im)
+	e.draw_image_at(x0, y0, em)
+	var kind: String = o["kind"]
+	var light: Variant = null
+	if kind == "barrier" and Py.imod(int(t * 2.5 + float(o["seed"])), 2) == 0:
+		for q: QP in [p, e]:
+			q.fill_rect(cx - 1 * k, gy - 12 * k, 2 * k + 1, 2 * k + 1, QP.rgb(DScene.AMBER))
+		light = [DScene.AMBER, 30, 40]
+	elif kind == "barrel":
+		for i in range(3):
+			var n := Scene._hash(int(t * 14) + i * 7, o["seed"])
+			var fh := (5 + 6 * n) * k
+			var bx := cx + (i - 1) * 2.2 * k
+			var poly := PackedVector2Array([Vector2(bx - 1.6 * k, gy - 9 * k),
+				Vector2(bx + (n - 0.5) * 2 * k, gy - 9 * k - fh), Vector2(bx + 1.6 * k, gy - 9 * k)])
+			for q: QP in [p, e]:
+				q.set_no_pen()
+				q.set_brush(QP.rgb(DScene.AMBER if i != 1 else [255, 220, 150]))
+				q.draw_polygon(poly)
+		light = [DScene.AMBER, 70 + int(25 * Scene._hash(int(t * 9), o["seed"])), 70]
+		if rng.random() < 0.05:
+			fx.puff(0, gy - 16 * k, o["x"], d, 0.6)
+	elif kind == "vending":
+		light = [[150, 200, 255], 45, 50]
+	if light != null:
+		var la: Array = light
+		var c: Array = la[0]
+		var a: int = la[1]
+		var rr: float = float(la[2]) * k
+		p.set_mode(PLUS)
+		var rg := QGrad.radial(cx, gy, rr)
+		rg.set_color_at(0, QP.rgb(c, a))
+		rg.set_color_at(1, QP.c(0, 0, 0, 0))
+		p.save()
+		p.translate(cx, gy)
+		p.scale(1.0, 0.35)
+		p.translate(-cx, -gy)
+		p.fill_rect(cx - rr, gy - rr, 2 * rr, 2 * rr, rg)
+		p.restore()
+		if kind == "barrel":
+			var rg2 := QGrad.radial(cx, gy - 14 * k, rr * 0.7)
+			rg2.set_color_at(0, QP.rgb(c, Py.ifloordiv(a, 2)))
+			rg2.set_color_at(1, QP.c(0, 0, 0, 0))
+			p.fill_rect(cx - rr, gy - 14 * k - rr, 2 * rr, 2 * rr, rg2)
+		p.set_mode(OVER)
 func _patrol_geom(_world: Variant, _cam: float, _t: float) -> Variant:
 	return null
 func _land_pose(_P: Variant, _cam: float, _t: float) -> Variant:
