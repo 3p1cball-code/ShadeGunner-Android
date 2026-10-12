@@ -161,7 +161,7 @@ func _init(run_: Run = null, seed_value: int = 0, zone_index_: Variant = null) -
 	var tr_v: Variant = zone.get("traffic")
 	traffic_gap = (float(tr_v) if tr_v else 0.0) / maxf(0.3, run.density)
 	traffic_slow = (minf(1.0, maxf(0.35, pow(traffic_gap / Config.TRAFFIC_REF, 0.55)))
-			if traffic_gap else 1.0)
+			if traffic_gap != 0.0 else 1.0)
 	patrol = null
 	patrol_cd = rng.uniform(16.0, 28.0) if zone.get("patrol") else null
 	watched = false
@@ -1053,4 +1053,239 @@ func _obstacle_ahead(a: Actor, look: float = 26.0) -> Variant:
 			return o
 	return null
 
-# --- TEIL3 ---
+# ------------------------------------------------------------------ Verkehr
+## Wer beim Start in einem Hindernis steht (parkendes Auto ...), tritt daneben.
+func _unstick(acts: Array) -> void:
+	for a: Actor in acts:
+		for o: Dictionary in obstacles:
+			if absf(a.x - o["x"]) < o["w"] + 3 and absf(a.depth - o["d"]) < o["dd"] + 0.025:
+				var up: float = o["d"] - o["dd"] - 0.03
+				var dn: float = o["d"] + o["dd"] + 0.03
+				a.depth = up if up > Config.NPC_DEPTH_MIN + 0.005 and (a.depth < o["d"] or dn > 0.98) else dn
+				a.target_depth = a.depth
+				break
+
+
+func _new_vehicle(lane: float, dr: int, x: Variant = null) -> Variant:
+	var kinds: Array = DSim.ZONE_TRAFFIC[Py.imod(zone_index, DSim.ZONE_TRAFFIC.size())]
+	var kind: String = rng.choice(kinds)
+	var dm: Array = DSim.VEHICLES[kind]
+	var L: float = dm[0]
+	var h: float = dm[1]
+	var sp: float = dm[2]
+	sp *= rng.uniform(0.9, 1.15) * traffic_slow
+	var vx_: float
+	if x == null:
+		vx_ = camera_x - dr * (maxf(sp, 120.0) * 0.8 + 300.0)
+	else:
+		vx_ = float(x)
+	for v: Dictionary in vehicles:                               # Einfahrt frei?
+		if v["depth"] == lane and absf(v["x"] - vx_) < (v["L"] + L) * 0.5 + 30.0:
+			return null
+	_veh_uid += 1
+	var vseed := rng.randint(0, 9999)
+	var react := rng.uniform(0.25, 0.6) * (1.6 if zone_index <= 1 else 0.8)
+	var v := {"x": vx_, "depth": lane, "dir": dr, "speed": sp, "vmax": sp, "kind": kind, "L": L, "h": h,
+			"seed": vseed, "honk": false, "snd": false, "slow_t": 0.0, "honk_cd": 0.0,
+			"react": react, "uid": -1000 - _veh_uid}
+	vehicles.append(v)
+	return v
+
+
+## Dichter Verkehr ist schon da, wenn man ankommt (statt erst hereinzufahren).
+func _prefill_traffic() -> void:
+	if traffic_gap == 0.0 or traffic_slow > 0.6:
+		return
+	for ld: Array in Config.LANES:
+		var lane: float = ld[0]
+		var dr: int = ld[1]
+		var x := camera_x - dr * 600.0
+		while (x - camera_x) * dr < 600.0:
+			var v: Variant = _new_vehicle(lane, dr, x)
+			var L: float = v["L"] if v != null else 90.0
+			if v != null:
+				v["snd"] = absf(x - camera_x) < 250        # schon vorbei / zu nah: kein Anfahrtsgeräusch
+			x += dr * (L + rng.uniform(1.0, 2.2) * traffic_gap * 60.0 * traffic_slow)
+
+
+func _update_traffic(dt: float, spawn: bool = true) -> void:
+	var p := player
+	if spawn and traffic_gap != 0.0:
+		traffic_cd -= dt
+		if traffic_cd <= 0:
+			var ld: Array = rng.choice(Config.LANES)
+			if _new_vehicle(ld[0], ld[1]) == null:
+				traffic_cd = 0.4                       # Einfahrt zu, gleich nochmal
+			else:
+				traffic_cd = rng.uniform(0.55, 1.45) * traffic_gap
+	# Kolonne: wer aufläuft, bremst auf das Tempo des Vordermanns
+	for ld: Array in Config.LANES:
+		var lane: float = ld[0]
+		var keyed := []
+		for j in vehicles.size():
+			var vv: Dictionary = vehicles[j]
+			if vv["depth"] == lane:
+				keyed.append([-vv["x"] * vv["dir"], j, vv])
+		keyed.sort_custom(func(pa: Array, qa: Array) -> bool:
+			return pa[0] < qa[0] or (pa[0] == qa[0] and pa[1] < qa[1]))   # stabil wie sorted()
+		var q := []
+		for e: Array in keyed:
+			q.append(e[2])
+		for i in q.size():
+			var v: Dictionary = q[i]
+			var vmax: float = v.get("vmax", v["speed"])
+			var goal := vmax
+			v["honk_cd"] = maxf(0.0, float(v.get("honk_cd", 0.0)) - dt)
+			# Spieler steht in der Spur: bremsen statt umfahren (früh = wenig Zeit)
+			if p.alive and absf(p.depth - lane) < Config.LANE_HALF + 0.03:
+				var ahead: float = (p.x - v["x"]) * v["dir"]
+				if 0.0 < ahead and ahead < vmax * 3.0 + v["L"]:
+					var need: float = ahead - (v["L"] * 0.5 + 5.0) - v["speed"] * float(v.get("react", 0.35))
+					goal = minf(goal, sqrt(maxf(0.0, 2.0 * Config.CAR_BRAKE * maxf(0.0, need))))
+			# Stop-and-go: Taxi lädt ein, jemand sucht einen Parkplatz ...
+			if float(v.get("halt", 0.0)) > 0.0:
+				v["halt"] -= dt
+				goal = 0.0
+			elif traffic_slow < 0.6 and vmax > 0 and absf(v["x"] - camera_x) < 600 \
+					and rng.random() < dt * (0.05 if v["kind"] == "taxi" else 0.012):
+				v["halt"] = rng.uniform(1.5, 4.5)
+			if i > 0:
+				var lv: Dictionary = q[i - 1]
+				var gap: float = (lv["x"] - v["x"]) * v["dir"] - (lv["L"] + v["L"]) * 0.5
+				var safe := Config.TRAFFIC_GAP + vmax * 0.9
+				if gap < safe:
+					goal = minf(vmax, maxf(0.0, lv["speed"] + (gap - safe) * 1.6))
+				if gap < 3.0:
+					v["speed"] = minf(v["speed"], lv["speed"])
+			var acc := 70.0 if goal > v["speed"] else 240.0
+			v["speed"] += maxf(-acc * dt, minf(acc * dt, goal - v["speed"]))
+			# dichter Verkehr: hier und da ein genervtes Meep (nur im Bild)
+			if traffic_slow < 0.7 and v["speed"] > 18 and absf(v["x"] - camera_x) < 340 \
+					and rng.random() < dt * 0.045:
+				events.append(["jam_honk", v["kind"], v["x"] - camera_x])
+			# Stau: wer lange steckt, hupt (nur im Bild)
+			if vmax > 0 and v["speed"] < vmax * 0.4:
+				v["slow_t"] = float(v.get("slow_t", 0.0)) + dt
+				if v["slow_t"] > 1.5 and rng.random() < dt * 0.6 and absf(v["x"] - camera_x) < 330:
+					events.append(["jam_honk", v["kind"], v["x"] - camera_x])
+					v["slow_t"] = 0.0
+			else:
+				v["slow_t"] = 0.0
+	var near_lane := {}
+	if not vehicles.is_empty():
+		for ld: Array in Config.LANES:
+			var lane: float = ld[0]
+			var lst := []
+			for a: Actor in actors:
+				if not a.player and a.alive and not a.escaped and absf(a.depth - lane) < Config.LANE_HALF + 0.045:
+					lst.append(a)
+			near_lane[lane] = lst
+	var n_near := 0
+	for w: Dictionary in vehicles:
+		if absf(w["x"] - camera_x) < 420:
+			n_near += 1
+	n_near = maxi(1, n_near)
+	var density_k := minf(1.0, 3.0 / n_near)             # viel Verkehr -> leiser
+	var keep := []
+	for v: Dictionary in vehicles:
+		v["x"] += v["dir"] * v["speed"] * dt
+		if (v["x"] - camera_x) * v["dir"] > 640.0:
+			continue
+		keep.append(v)
+		var lane: float = v["depth"]
+		# Anfahrtsgeräusch, wenn es die Kamera in ~2,5 s erreicht
+		if not v.get("snd", true):
+			var r_: float = (camera_x - v["x"]) * v["dir"]
+			if 0 < r_ and r_ < maxf(v["speed"], 60.0) * 2.5:
+				v["snd"] = true
+				var vs := minf(1.0, maxf(0.15, v["speed"] / 170.0))          # langsam -> leise
+				var vol := maxf(0.18, minf(1.0, (0.20 + 0.80 * vs) * density_k))
+				events.append(["vehicle", v["kind"], v["dir"], Py.round_n(vol, 3)])
+		# Spieler: Hupen, Treffer
+		if p.alive:
+			var in_lane := absf(p.depth - lane) < Config.LANE_HALF + 0.02
+			var ahead: float = (p.x - v["x"]) * v["dir"]
+			# anhupe, wenn ich in der Spur stehe (auch seitlich / halb davor)
+			if (absf(p.depth - lane) < Config.LANE_HALF + 0.035 and v["speed"] > 12
+					and -v["L"] < ahead and ahead < maxf(v["speed"], 45.0) * 1.5 + v["L"] and v["honk_cd"] <= 0.0):
+				v["honk_cd"] = 2.0
+				events.append(["honk", v["kind"]])
+			if in_lane and absf(p.x - v["x"]) < v["L"] * 0.5 + 3 and p.z < v["h"] * 0.75:
+				if ahead > 0.0 and v["speed"] > Config.CAR_DANGER_SPEED:
+					# Chance, dass der Fahrer in letzter Sekunde noch bremst (früh seltener)
+					if rng.random() < car_escape:
+						v["speed"] = minf(v["speed"], 25.0)
+						events.append(["honk", v["kind"]])
+						_car_bump(v, lane)
+					elif hurt_player(v, 60.0, "ANGEFAHREN! -1"):
+						_push_out_of_lane(lane)
+						events.append(["car_hit"])
+				else:
+					_car_bump(v, lane)
+		# Passanten weichen aus
+		for a: Actor in near_lane.get(lane, []):
+			var rel: float = (a.x - v["x"]) * v["dir"]
+			if -v["L"] < rel and rel < maxf(v["speed"], 30.0) * 2.3 and absf(a.depth - lane) < Config.LANE_HALF + 0.045:
+				if a.state in ["duck", "freeze", "hands", "loiter"]:
+					a.state = "panic"
+					a.timer = 1.5
+				if a.dodge_t <= 0.0:
+					var side := 1 if a.depth >= lane else -1
+					var td := lane + side * (Config.LANE_HALF + 0.07)
+					if td < Config.DEPTH_MIN + 0.01 or td > 0.98:
+						td = lane - side * (Config.LANE_HALF + 0.07)
+					a.target_depth = minf(0.98, maxf(Config.DEPTH_MIN + 0.01, td))
+				a.dodge_t = 0.8
+	vehicles = keep
+
+
+func _push_out_of_lane(lane: float) -> void:
+	var p := player
+	var side := 1 if p.depth >= lane else -1
+	p.depth = minf(Config.DEPTH_MAX, maxf(Config.DEPTH_MIN, lane + side * (Config.LANE_HALF + 0.06)))
+
+
+## Seitlich/stehend gerammt: kurzer Stun, kein Herz.
+func _car_bump(v: Dictionary, lane: float) -> void:
+	var p := player
+	if p.invuln > 0 or state != "playing":
+		return
+	p.invuln = Config.CAR_BUMP_INVULN
+	p.flash_t = 0.2
+	p.state = "hurt"
+	p.timer = 0.3
+	p.knock = 55.0 if p.x >= v["x"] else -55.0
+	_push_out_of_lane(lane)
+	scan_t = -1.0
+	scan_target = null
+	aiming = false
+	floater(_tr("REMPLER"), p, [255, 182, 72], 1.1)
+	events.append(["bump"])
+
+
+# ------------------------------------------------------------------ Dampf
+## 0..1: wie dicht der Dampf an dieser Stelle ist (Gullis / Schlote).
+func steam_at(x: float, d: float) -> float:
+	var best := 0.0
+	for m: Dictionary in manholes:
+		var dx: float = x - (m["x"] + m["drift"])
+		if absf(dx) < 30 and absf(d - m["d"]) < 0.07:
+			var k: float = (1.0 - absf(dx) / 30.0) * (1.0 - absf(d - m["d"]) / 0.07)
+			best = maxf(best, m["s"] * k)
+	return minf(1.0, best * 1.6)
+
+
+func _update_steam(dt: float) -> void:
+	for m: Dictionary in manholes:
+		m["t"] += dt
+		var t: float = m["t"]
+		var base: float = m["base"] * (0.75 + 0.25 * sin(t * 0.7 + m["ph"]))
+		if m["burst"] <= 0.0 and rng.random() < dt / m["every"]:
+			m["burst"] = 3.0                                 # Schwall
+		if m["burst"] > 0.0:
+			m["burst"] -= dt
+			base = maxf(base, minf(1.0, m["burst"] / 1.2) * 1.0)
+		m["s"] = base
+		m["drift"] = 10.0 * sin(t * 0.13 + m["ph"])
+
+# --- TEIL4 ---
