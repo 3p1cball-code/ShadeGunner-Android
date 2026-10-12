@@ -55,11 +55,16 @@ for i, c in enumerate(cases):
     r2 = None
     if pm[i].get("emit") or gm[i].get("emit"):
         r2 = cmp(arr(f"{d}/py_{i}_e.png"), arr(f"{d}/gd_{i}_e.png"), f"{i}_e")
+    import os
+    r3 = cmp(arr(f"{d}/py_{i}_tex.png"), arr(f"{d}/gd_{i}_tex.png"), f"{i}_tex") if os.path.exists(f"{d}/py_{i}_tex.png") else None
     a, b = pm[i], gm[i]
     mok = all(abs(float(a[k]) - float(b.get(k, -999))) < 1e-6 for k in a if k != "emit") and a["emit"] == b["emit"]
     desc = " ".join(f"{k}={v}" for k, v in c.items() if k not in ("rim",))
     worst = max(worst, 100.0 if r1 is None else r1[0], 0.0 if r2 is None else r2[0])
     f = lambda r: "FEHLT" if r is None else f"{r[0]:5.2f} ({r[1]:5.2f})"
+    worst = max(worst, 0.0 if r3 is None else r3[0])
     print(f"{i:>2} {desc:<52} Bild {f(r1)}  Emit {'-' if r2 is None and not a['emit'] else f(r2)}  "
+          + (f"Tex {f(r3)}  " if r3 is not None else "")
+          + 
           f"{'ok' if mok else 'META ' + str(a) + ' / ' + str(b)}")
 print(f"schlechtester Wert: {worst:.2f} % (Toleranz {tol}; in Klammern: Anteil an belegten Pixeln)")
