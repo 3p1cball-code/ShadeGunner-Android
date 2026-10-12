@@ -35,6 +35,26 @@ static var _fx_used: Array[RID] = []  # Postprocess-Items, warten auf den Atlas-
 static var _fx_pool: Array[RID] = []
 static var _fx_draw_index := 0
 static var _mats := {}                # m -> ShaderMaterial
+## Versatz der Formen im Zielraum (s. _SP); veränderbar für Tests.
+static var shape_eps := 1.0 / 128.0
+
+
+## QP mit Qt-Abtastregel für Formen: Qt füllt aliased jedes Pixel, dessen Mitte
+## in (x0, x1] liegt. Die GPU füllt [x0, x1) - ein winziger Versatz +eps gleicht
+## das an. (QP._gx versetzt um +0.5 px; das stimmt nur für ganzzahlige Koordinaten.)
+class _SP extends QP:
+	func _gx() -> Transform2D:
+		return Transform2D(xf.x, xf.y, xf.origin + Vector2(Sprites.shape_eps, Sprites.shape_eps))
+
+
+## Wie Baker.Atlas.painter_for, aber mit _SP.
+static func _painter_for(a: Baker.Atlas, r: Rect2i) -> QP:
+	var p := _SP.new(a.host.get_canvas_item())
+	p.begin()
+	p.set_clip_rect(r.position.x, r.position.y, r.size.x, r.size.y)
+	p.translate(r.position.x, r.position.y)
+	a._pending.append(p)
+	return p
 
 
 static func _mul(c: Array, f: float) -> Array:
@@ -595,7 +615,7 @@ static func _ensure() -> void:
 	_raw = baker.make_atlas(atlas_size)
 	_fin = baker.make_atlas(atlas_size)     # nach _raw angelegt -> rendert danach
 	_dummy_root = RenderingServer.canvas_item_create()
-	_dummy = QP.new(_dummy_root)
+	_dummy = _SP.new(_dummy_root)
 
 
 ## Postprocess-Items freigeben, sobald der Atlas sie gerendert hat.
@@ -725,10 +745,10 @@ static func get_(look: Dictionary, anim: String, frame: int, height_px: float, f
 	if slots.is_empty():
 		return [null, null, ax, ay, {}]
 	var r: Rect2i = slots[0]
-	var p := _raw.painter_for(r)
+	var p := _painter_for(_raw, r)
 	var pe: QP
 	if emit_used:
-		pe = _raw.painter_for(slots[1])
+		pe = _painter_for(_raw, slots[1])
 	else:
 		_dummy.begin()
 		pe = _dummy
