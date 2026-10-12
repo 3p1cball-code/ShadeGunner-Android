@@ -7,7 +7,9 @@ extends QP
 ##  2. Stifte <= 1 Gerätepixel: QCosmeticStroker - Deckkraft int(256 * Breite * Skala)/256
 ##     und eigene Pixelwahl (Festkomma-Nachbau, _qt_line_cells, 0/400 Abweichungen).
 ##  3. Polylinien/Konturen als ein Pfad: dünn -> jedes Pixel einmal; dick und
-##     halbtransparent -> Umriss ohne Doppeldeckung an den Stößen.
+##     halbtransparent -> Umriss ohne Doppeldeckung an den Stößen; dick und deckend ->
+##     Segmente ohne Kappen + Bevel-Join (Qt-Standard), Kappen nur an offenen Enden.
+##  4. draw_image: Zielpixel per Pixelmitte wie bei Formen (+eps).
 
 static var eps := 1.0 / 128.0
 
@@ -73,7 +75,7 @@ func draw_polyline(pts: PackedVector2Array) -> void:
 		_cells(cells, _cos_col())
 		return
 	if pen_col.a * opacity >= 1.0:
-		super.draw_polyline(pts)
+		_thick_path(pts)
 		return
 	# Halbtransparent: Strich-Umriss (Segmente + runde Stöße) einmal füllen
 	var hw := pen_w * 0.5
@@ -110,6 +112,53 @@ func draw_polyline(pts: PackedVector2Array) -> void:
 			done.append(part)
 	for f in fills:
 		_fill_poly(f, pen_col)
+
+
+## Deckender dicker Pfad: Segmente flach, Stöße als Bevel, Kappen nur an offenen Enden.
+func _thick_path(pts: PackedVector2Array) -> void:
+	var it := _seg("")
+	var col := _pc(pen_col)
+	var hw := pen_w * 0.5
+	var closed := pts.size() > 2 and pts[0].is_equal_approx(pts[pts.size() - 1])
+	var nrm: Array[Vector2] = []
+	for i in range(1, pts.size()):
+		var d := pts[i] - pts[i - 1]
+		nrm.append(Vector2(-d.y, d.x).normalized() * hw if d.length() > 0.0001 else Vector2.ZERO)
+	for i in range(1, pts.size()):
+		var a := pts[i - 1]
+		var b := pts[i]
+		var nr := nrm[i - 1]
+		if nr == Vector2.ZERO:
+			continue
+		var u := Vector2(nr.y, -nr.x)
+		if not closed and pen_cap == CAP_SQUARE:
+			if i == 1:
+				a -= u
+			if i == pts.size() - 1:
+				b += u
+		RenderingServer.canvas_item_add_polygon(it, PackedVector2Array([a + nr, b + nr, b - nr, a - nr]), PackedColorArray([col]))
+	# Bevel-Stöße
+	var n := nrm.size()
+	for i in range(0, n - 1 + (1 if closed else 0)):
+		var n0 := nrm[i]
+		var n1 := nrm[(i + 1) % n]
+		var c := pts[i + 1]
+		if n0 == Vector2.ZERO or n1 == Vector2.ZERO:
+			continue
+		for sgn: float in [1.0, -1.0]:
+			var tri := PackedVector2Array([c, c + n0 * sgn, c + n1 * sgn])
+			if absf((tri[1] - tri[0]).cross(tri[2] - tri[0])) > 1e-9:
+				RenderingServer.canvas_item_add_polygon(it, tri, PackedColorArray([col]))
+	if not closed and pen_cap == CAP_ROUND:
+		_dot_shape(it, pts[0], hw, col)
+		_dot_shape(it, pts[pts.size() - 1], hw, col)
+
+
+func draw_image(dst: Rect2, img: QImg, src: Rect2 = Rect2()) -> void:
+	var keep := xf
+	xf = Transform2D(xf.x, xf.y, xf.origin + Vector2(eps, eps))
+	super.draw_image(dst, img, src)
+	xf = keep
 
 
 ## Kontur als geschlossener Pfad (Qt strichelt den Pfad am Stück).
