@@ -1,10 +1,12 @@
 extends Node
-## Smoke-/Pixeltest City Teil 1: baut City für Zone 0..4 und speichert die Ebenenbilder.
+## Smoke-/Pixeltest City Teil 1+2/3: baut City für Zone 0..4 und speichert ALLE Ebenen
+## plus zusammengesetzte Straßenbilder bei mehreren Kamerapositionen.
 ## godot --path . --rendering-driver opengl3 res://tests/city_test.tscn -- --out=<dir>
 ## Gegenstück: tools/city_reference.py (gleiche Dateinamen, gleiche Daten-JSON).
 
 const LENGTH := 3000.0
 const SEED := 12345
+const CAMS := [0.0, 800.0, 1600.0, 2400.0, 2900.0]
 
 var out := "res://shots/city_godot"
 var baker: Baker
@@ -30,13 +32,35 @@ func _ready() -> void:
 			shots.append(["z%d_clouds%d" % [z, i], (c.cloud_layers[i] as Array)[0]])
 		shots.append(["z%d_far" % z, c.far.img])
 		shots.append(["z%d_mid" % z, c.mid.img])
+		shots.append(["z%d_facade" % z, c.facade.img])
+		shots.append(["z%d_emit" % z, c.facade_emit])
+		shots.append(["z%d_ground" % z, c.ground])
 		for i in c.fog_layers.size():
 			shots.append(["z%d_fog%d" % [z, i], c.fog_layers[i]])
 		shots.append(["z%d_bank" % z, c.bank])
 		shots.append(["z%d_cloud" % z, c.cloud])
-		data["z%d" % z] = {"blinks": c.blinks, "flames": c.flames, "billboards": c.billboards,
-			"searchlights": c.searchlights, "air": c.air, "far": [c.far.lmin, c.far.width],
-			"mid": [c.mid.lmin, c.mid.width], "rng": c.rng.random()}
+		for ci in CAMS.size():
+			var cam: float = CAMS[ci]
+			var img := City._bake(City.W, City.H, func(p: QP) -> void:
+				p.draw_image_at(0, 0, c.sky)
+				c.far.draw(p, cam)
+				c.mid.draw(p, cam)
+				c.facade.draw(p, cam)
+				c.draw_ground(p, cam))
+			shots.append(["z%d_street%d" % [z, ci], img])
+		var kinds: Array = []
+		for h: Dictionary in c.holos:
+			kinds.append(String(h["kind"]))
+		kinds.sort()
+		data["z%d" % z] = {
+			"counts": {"blinks": c.blinks.size(), "flames": c.flames.size(), "billboards": c.billboards.size(),
+				"searchlights": c.searchlights.size(), "air": c.air.size(), "signs": c.signs.size(),
+				"lamps": c.lamps.size(), "lanterns": c.lanterns.size(), "tvs": c.tvs.size(), "vents": c.vents.size(),
+				"holos": c.holos.size(), "ramen_spots": c.ramen_spots.size(), "manholes": c.manholes.size(),
+				"puddles": c.puddles.size()},
+			"far": [c.far.lmin, c.far.width], "mid": [c.mid.lmin, c.mid.width],
+			"gate": c.gate, "exit_L": c.exit_L, "g_wmin": c.g_wmin, "ground_y0": c.ground_y0,
+			"holo_kinds": kinds, "rng": c.rng.random()}
 	print("City x5: %d ms" % (Time.get_ticks_msec() - t0))
 	var r := PyRandom.new(5)
 	var s1 := City._make_sign(r, City.CYAN, "vertical")

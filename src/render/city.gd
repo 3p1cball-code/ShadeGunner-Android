@@ -133,18 +133,19 @@ static func soft_reflection(img: QImg) -> QImg:
 		p.translate(0, h)
 		p.scale(1.0, -1.0)
 		p.draw_image(Rect2(0, 0, w, h), img))
+	# Blur-Stufen: Qt verkleinert mit Box-Filter (flächige Mittelung). Godot kann das
+	# nicht auf der GPU (bilineares Sampling unterabtastet -> Rand bleibt zu scharf),
+	# daher CPU-Resampling (Antialiasing-Filter) und danach bilineares Hochskalieren.
 	var layers: Array = [mir]                           # 0 = scharf
 	for hw: Array in [[3, 2], [6, 3], [12, 5]]:         # 1 mild, 2 mittel, 3 stark verwischt
 		var hf: int = hw[0]
 		var wf: int = hw[1]
 		var sw := maxi(1, Py.ifloordiv(w, wf))
 		var sh := maxi(1, Py.ifloordiv(h, hf))
-		var small := _bake(sw, sh, func(p: QP) -> void:
-			p.set_smooth(true)
-			p.draw_image(Rect2(0, 0, sw, sh), mir))
+		var small_tex := _box_down_gpu(mir.tex, w, h, sw, sh)
 		var big := _bake(w, h, func(p: QP) -> void:
 			p.set_smooth(true)
-			p.draw_image(Rect2(0, 0, w, h), small))
+			p.draw_texture(Rect2(0, 0, w, h), small_tex))
 		layers.append(big)
 	var tmps: Array = []
 	# von hinten (stark verwischt, tief) nach vorn (scharf, Kontaktpunkt)
@@ -168,6 +169,54 @@ static func soft_reflection(img: QImg) -> QImg:
 	return _bake(w, h, func(op: QP) -> void:
 		for t: QImg in tmps:
 			op.draw_image_at(0, 0, t))
+
+
+## Flächige Mittelung (Box-Filter) wie Qts SmoothTransformation beim Verkleinern -
+## auf der GPU, weil ein Readback mitten im Bake noch leer wäre. Der Shader mittelt
+## ein Gitter über die Quellfläche JEDES Zielpixels (premultipliziert, linear).
+const BOX_SHADER := """
+shader_type canvas_item;
+render_mode blend_disabled, unshaded;
+uniform sampler2D src : filter_nearest, repeat_disable;
+uniform vec2 box;
+uniform vec2 srcsize;
+void fragment() {
+	vec2 sp = UV * srcsize;
+	vec2 start = sp - box * 0.5;
+	vec4 acc = vec4(0.0);
+	const int N = 6;
+	for (int j = 0; j < N; j++) {
+		for (int i = 0; i < N; i++) {
+			vec2 o = (vec2(float(i), float(j)) + 0.5) / float(N);
+			acc += texture(src, (start + o * box) / srcsize);
+		}
+	}
+	COLOR = acc / float(N * N);
+}
+"""
+
+
+static func _box_down_gpu(src: Texture2D, w: int, h: int, sw: int, sh: int) -> Texture2D:
+	var vp := SubViewport.new()
+	vp.size = Vector2i(maxi(1, sw), maxi(1, sh))
+	vp.transparent_bg = true
+	vp.disable_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+	vp.render_target_clear_mode = SubViewport.CLEAR_MODE_ONCE
+	var cr := ColorRect.new()
+	cr.position = Vector2.ZERO
+	cr.size = Vector2(sw, sh)
+	var mat := ShaderMaterial.new()
+	var shd := Shader.new()
+	shd.code = BOX_SHADER
+	mat.shader = shd
+	mat.set_shader_parameter("src", src)
+	mat.set_shader_parameter("box", Vector2(float(w) / sw, float(h) / sh))
+	mat.set_shader_parameter("srcsize", Vector2(w, h))
+	cr.material = mat
+	vp.add_child(cr)
+	baker.add_child(vp)
+	return vp.get_texture()
 
 
 static func _wchoice(rng: PyRandom, items: Array) -> Variant:
@@ -1762,8 +1811,8 @@ func _ground() -> void:
 		for _i in np:
 			var px_ := rng.uniform(0, gw)
 			var r := rng.randint(curb_row + 3, rows - 2)
-			var pw := rng.uniform(24, 92) * (0.5 + r / rows)
-			var ph := maxf(3, int(rng.uniform(3.0, 7.0) * (0.6 + r / rows)))
+			var pw := rng.uniform(24, 92) * (0.5 + r / float(rows))
+			var ph := maxf(3, int(rng.uniform(3.0, 7.0) * (0.6 + r / float(rows))))
 			p.set_mode(QP.SOURCE)
 			p.set_brush(qc([26, 34, 52], 70))
 			p.draw_ellipse(px_, r, pw, ph)
