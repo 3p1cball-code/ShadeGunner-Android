@@ -21,7 +21,7 @@ extends RefCounted
 ##     SceneEmit    W x H, transparent, jedes Frame geleert  <- Painter e
 ##     SceneSmall   W//4 x H//4   (Box-Verkleinerung von emit)
 ##     SceneTiny    W//16 x H//16 (Box-Verkleinerung von small)
-##     SceneImg     W x H, opak, wird NIE geleert (wie self.img) <- Painter p
+##     SceneImg     W x H, opak, jedes Frame geleert (malt vollflaechig) <- Painter p
 ##
 ## Godot rendert Geschwister-SubViewports in Baumreihenfolge: emit -> small ->
 ## tiny -> Szene. Der Glow im Szenenbild nutzt also die emit-Texturen desselben
@@ -169,7 +169,11 @@ func setup(parent: Node, baker_: Baker = null) -> Texture2D:
 	parent.add_child(_tiny_vp)
 	_tiny_tex = _tiny_vp.get_texture()
 
-	_scene_vp = _make_vp("SceneImg", w, h, false, SubViewport.CLEAR_MODE_ONCE)
+	# Jedes frame() malt die Szene vollflaechig neu (Himmel + Strasse sind deckend), daher
+	# darf der Viewport jedes Frame geleert werden. Das entspricht dem nicht geleerten
+	# self.img des Originals und macht ein erneutes force_draw() idempotent (kein
+	# Addieren der Leuchtschicht), was der Paritaetstest zum Settlen braucht.
+	_scene_vp = _make_vp("SceneImg", w, h, false, SubViewport.CLEAR_MODE_ALWAYS)
 	var ph := Node2D.new()
 	_scene_vp.add_child(ph)
 	parent.add_child(_scene_vp)

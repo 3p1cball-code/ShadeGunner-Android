@@ -1,21 +1,35 @@
 extends Node
-## Vollbild-Paritaet der Szenen-Komposition: rendert Scene.frame fuer dieselben
-## sim.Worlds (Seed/Zone), Schrittzahlen und Kamerapositionen wie
-## tools/scene_reference.py und speichert gd_z<zone>_c<cam>.png.
+## Vollbild-Paritaet der Szenen-Komposition gegen tools/scene_reference.py.
 ##
 ## godot --path . --rendering-driver opengl3 res://tests/scene_test.tscn -- --out=<dir>
 ## Vergleich: python3 tools/imgdiff.py <dir>/py_*.png <dir>/gd_*.png
+##
+## Beide Seiten bauen dieselben sim.Worlds (Seed/Zone), lassen sie STEPS Schritte mit
+## leerer Eingabe laufen und rendern dann dieselben Kamerapositionen ueber dieselbe
+## (eine) Scene. frame() wird pro Schuss GENAU EINMAL aufgerufen (gleiche t-Phasen wie
+## die Referenz); danach wird nur noch gezeichnet.
+##
+## Wichtig: City-Ebenen und die Laufzeit-Reflexionen (Fahrzeuge/Figuren/Schilder)
+## entstehen als Ketten von UPDATE_ONCE-SubViewports und sind erst ueber echte
+## Engine-Frames hinweg fertig. Deshalb wird die Zone vorab per ensure_zone() gebaut
+## und SETTLE Frames gewartet; je Schuss folgen weitere SETTLE Frames, bevor das Bild
+## gelesen wird. Der Szenen-Viewport leert dabei jedes Frame (CLEAR_ALWAYS), damit das
+## Warten die additive Leuchtschicht nicht aufsummiert.
 
 const DT := 1.0 / 60.0
 const SEED := 12345
 const STEPS := 300
 const CAMS := [-1500.0, 0.0, 1500.0]
+const SETTLE := 3
 
 var out := "res://shots/scene_godot"
 var baker: Baker
 var sc: Scene
-var frames := 0
-var done := false
+var zones: Array = []          # [World, zone, base_camera_x]
+var zi := 0
+var ci := 0
+var wait := 0
+var phase := 0                 # 0 Start | 1 Zone settlen | 2 Schuss settlen | 3 fertig
 
 
 func _ready() -> void:
@@ -32,35 +46,67 @@ func _ready() -> void:
 	Holo.baker = baker
 	sc = Scene.new()
 	sc.setup(self, baker)
-
-
-func _process(_d: float) -> void:
-	frames += 1
-	if frames < 3 or done:
-		return
-	done = true
-	var names: Array = []
 	for z in 5:
 		var w := World.new(Run.new(SEED, "normal"), SEED, z)
 		for i in STEPS:
 			w.update(DT, {})
 			w.events.clear()
-		var base: float = w.camera_x
-		for ci in CAMS.size():
-			w.camera_x = clampf(base + CAMS[ci], 0.0, w.length)
-			sc.frame(w, DT)
-			# Zweimal zeichnen: die beim Zonenaufbau frisch gebackenen City-Ebenen
-			# hängen als UPDATE_ONCE-Viewports am Baker und sind erst einen Draw
-			# spaeter sichtbar (sonst waere genau das erste Bild je Zone zu dunkel).
-			RenderingServer.force_draw()
-			RenderingServer.force_draw()
-			var im := sc.img.get_image()
-			im.convert(Image.FORMAT_RGBA8)
-			var nm := "z%d_c%d" % [z, ci]
-			im.save_png(out.path_join("gd_" + nm + ".png"))
-			names.append(nm)
+		zones.append([w, z, w.camera_x])
+
+
+func _process(_d: float) -> void:
+	if wait > 0:
+		RenderingServer.force_draw()
+		wait -= 1
+		return
+	match phase:
+		0:
+			sc.ensure_zone(zi, SEED, (zones[zi][0] as World).length)
+			phase = 1
+			wait = SETTLE
+		1:
+			_draw_shot()
+			phase = 2
+			wait = SETTLE
+		2:
+			_save_shot()
+			_advance()
+		3:
+			pass
+
+
+func _draw_shot() -> void:
+	var w: World = zones[zi][0]
+	var base: float = zones[zi][2]
+	w.camera_x = clampf(base + CAMS[ci], 0.0, w.length)
+	sc.frame(w, DT)
+
+
+func _save_shot() -> void:
+	var im := sc.img.get_image()
+	im.convert(Image.FORMAT_RGBA8)
+	im.save_png(out.path_join("gd_z%d_c%d.png" % [zi, ci]))
+
+
+func _advance() -> void:
+	ci += 1
+	if ci < CAMS.size():
+		phase = 1
+		wait = SETTLE
+		return
+	ci = 0
+	zi += 1
+	if zi < zones.size():
+		phase = 0
+		wait = 0
+		return
+	var names: Array = []
+	for p: Array in zones:
+		for c in CAMS.size():
+			names.append("z%d_c%d" % [p[1], c])
 	var f := FileAccess.open(out.path_join("cases.txt"), FileAccess.WRITE)
 	f.store_string("\n".join(names))
 	f.close()
 	print("scene_test: ", names.size(), " Bilder -> ", out)
+	phase = 3
 	get_tree().quit()
