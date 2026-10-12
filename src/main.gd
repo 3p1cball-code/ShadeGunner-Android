@@ -4,7 +4,6 @@ extends Control
 
 const RW := Config.RENDER_W
 const RH := Config.RENDER_H
-const WORLD := preload("res://src/world.gd")
 
 var _scene_vp: SubViewport
 var _chain: CRTChain
@@ -41,10 +40,7 @@ func _ready() -> void:
 		cr.color = Color8(int(fc[0]), int(fc[1]), int(fc[2]))
 		cr.size = Vector2(RW, RH)
 		_scene_vp.add_child(cr)
-	else:
-		var world := Node2D.new()
-		world.set_script(WORLD)
-		_scene_vp.add_child(world)
+	# Szenenaufbau folgt mit game.gd (world.gd entfernt)
 
 	_chain = CRTChain.new()
 	_chain.scene_tex = _scene_vp.get_texture()
