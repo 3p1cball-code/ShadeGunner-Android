@@ -966,6 +966,8 @@ func _patrol(_p_: QP, _e_: QP, _world: Variant, _cam: float, _t: float) -> void:
 
 
 func _beam_rain(_p_: QP) -> void:
+	if _beam_poly == null:   # bp = getattr(self, "_beam_poly", None)
+		return
 	pass  # TEIL B/C
 
 
