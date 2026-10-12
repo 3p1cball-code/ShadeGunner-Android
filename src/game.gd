@@ -45,7 +45,13 @@ var _shot_path := ""
 var _shot_frames := 60
 var _shot_at_mode := ""
 var _frame := 0
+var _tickn := 0
 var _autoplay := false
+var _devtest := false
+var _show_fps := false
+var _nocr := false
+var _prof_scene := 0.0
+var _prof_hud := 0.0
 
 
 func _ready() -> void:
@@ -69,11 +75,19 @@ func _ready() -> void:
 	hud = HUD.new()
 	var htex: Texture2D = hud.setup(self)
 
-	chain = CRTChain.new()
-	chain.scene_tex = stex
-	chain.hud_tex = htex
-	chain.scan_on = bool(settings.get("scanlines", true))
-	add_child(chain)
+	if _nocr:
+		var cr := TextureRect.new()
+		cr.texture = stex
+		cr.set_anchors_preset(Control.PRESET_FULL_RECT)
+		cr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		cr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		add_child(cr)
+	else:
+		chain = CRTChain.new()
+		chain.scene_tex = stex
+		chain.hud_tex = htex
+		chain.scan_on = bool(settings.get("scanlines", true))
+		add_child(chain)
 
 	audio = Audio.new()
 	add_child(audio)
@@ -143,6 +157,13 @@ func _parse_args() -> void:
 				DisplayServer.window_set_size(Vector2i(int(wh[0]), int(wh[1])))
 		elif a == "--auto":
 			_autoplay = true
+		elif a == "--nocr":
+			_nocr = true
+		elif a == "--fps":
+			_show_fps = true
+		elif a == "--devtest":
+			_devtest = true
+			_shot_frames = 400
 
 
 # ---------------------------------------------------------------- Zustaende
@@ -208,6 +229,7 @@ func _after_states() -> void:
 # ---------------------------------------------------------------- Loop
 func _process(delta: float) -> void:
 	var dt := minf(0.05, delta)
+	_tickn += 1
 	_dt = dt
 	mode_t += dt
 	power = minf(1.0, power + dt * 1.4)
@@ -228,6 +250,8 @@ func _process(delta: float) -> void:
 				_trans = null
 
 	_handle_actions()
+	if _devtest:
+		_devtest_tick()
 	_after_states()
 	var paused := help or mode in ["pause", "settings"]
 	if not paused:
@@ -256,22 +280,73 @@ func _process(delta: float) -> void:
 	audio.update(dt, world, mode)
 
 	var cam: Variant = title_cam if mode == "title" else null
+	var _t0 := Time.get_ticks_usec()
 	scene.frame(world, dt if not paused else 0.0, mode != "title", fade, power, cam)
+	var _t1 := Time.get_ticks_usec()
 	hud.render(world, scene, dt, _hud_ui())
+	var _t2 := Time.get_ticks_usec()
+	_prof_scene = float(_t1 - _t0) / 1000.0
+	_prof_hud = float(_t2 - _t1) / 1000.0
 	_edges.clear()
 	_mouse_moved = false
 
+	if _show_fps and _tickn % 30 == 0:
+		print("fps=", Engine.get_frames_per_second(), "  szene=", "%.1f" % _prof_scene, "ms  hud=", "%.1f" % _prof_hud, "ms")
 	if _shot_path != "":
-		_frame += 1
 		RenderingServer.force_draw()
 		RenderingServer.force_draw()
-		if _frame >= _shot_frames:
+		if _tickn >= _shot_frames:
 			get_viewport().get_texture().get_image().save_png(_shot_path)
 			print("shot: ", _shot_path)
 			get_tree().quit()
 
 
 var _edges := {}
+
+
+## Selbsttest: alle Menuepfade und Aktionen einmal durchspielen (nur mit --devtest).
+func _devtest_tick() -> void:
+	var f := _tickn
+	if f == 5:
+		_open_settings("title")
+	elif f >= 8 and f < 8 + _setting_keys().size() * 2:
+		settings_sel = (f - 8) / 2
+		_settings_adjust(1 if (f % 2 == 0) else -1)
+	elif f == 40:
+		_set_mode("title")
+		help = true
+	elif f == 45:
+		help = false
+	elif f == 50:
+		_transition(_start_run)
+	elif f == 90:
+		_set_mode("pause")
+	elif f == 95:
+		_set_mode("play")
+	elif f == 120:
+		_edges["scan"] = true
+		if world.target == null and not world.living().is_empty():
+			world.set_target(world.living()[0])
+	elif f == 130:
+		mouse_aim = true
+	elif f == 140:
+		mouse_aim = false
+	elif f == 160:
+		_edges["jump"] = true
+	elif f == 170:
+		_edges["cycle"] = 1
+	elif f == 180:
+		options = world.run.offer(PyRandom.new(world.seed + world.zone_index))
+		sel = 0
+		_set_mode("clear")
+	elif f == 200:
+		_choose(0)
+	elif f == 260:
+		_finish(true)
+	elif f == 280:
+		_set_mode("over")
+	elif f == 300:
+		_transition(_title_world)
 
 
 # ---------------------------------------------------------------- Spiel

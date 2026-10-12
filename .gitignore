@@ -19,3 +19,4 @@ __pycache__/
 
 # Godot generiert .uid-Dateien neu
 *.uid
+export_presets.cfg

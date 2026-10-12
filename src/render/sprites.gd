@@ -35,6 +35,8 @@ const _BOT := 4.0
 static var baker: Baker
 ## Kantenlänge der beiden Atlanten (Pixel).
 static var atlas_size := 2048
+static var bake_n := 0        # Diagnose: Bakes pro Zeitfenster
+static var fail_n := 0        # Diagnose: Atlas voll
 
 static var _CACHE := {}
 static var _cache_obj: ExactCache     # Atlanten + Freigabe (src/render/exact_cache.gd)
@@ -597,6 +599,10 @@ static func frame_count(anim: String) -> int:
 
 
 ## Alles verwerfen (wie _CACHE.clear(), z. B. beim Zonenwechsel).
+static func cache_size() -> int:
+	return _CACHE.size()
+
+
 static func clear_cache() -> void:
 	if _cache_obj == null:
 		_CACHE.clear()
@@ -607,12 +613,16 @@ static func clear_cache() -> void:
 static func get_(look: Dictionary, anim: String, frame: int, height_px: float, facing: int = 1,
 		rim: Variant = null, rim_side: int = 1, fog_rgb: Array = [0, 0, 0], fog: float = 0.0,
 		outline: Array = [4, 5, 10]) -> Array:
-	var hpx := maxi(8, Py.round(height_px))
-	var fogq := float(Py.round(fog * 8)) / 8.0
+	# Leistung: Hoehe auf 2 px und Nebel auf 0.25 rastern. Sonst aendert sich der
+	# Schluessel bei jeder Tiefenaenderung, und in GDScript kostet ein Bake ~1 ms
+	# (QPainter: 0.05 ms) - das laesst die Bildrate einbrechen.
+	var hpx := maxi(8, Py.round(height_px / 2.0) * 2)
+	var fogq := float(Py.round(fog * 4)) / 4.0
 	var key := [look["id"], anim, frame, hpx, facing, rim, rim_side, fog_rgb, fogq, outline]
 	var hit: Variant = _CACHE.get(key)
 	if hit != null:
 		return hit
+	bake_n += 1
 	var ec := _ec()
 	ec.settle()
 	if _CACHE.size() > _CACHE_MAX:     # wie _CACHE.clear() im Original, aber vor dem Zeichnen
@@ -637,6 +647,7 @@ static func get_(look: Dictionary, anim: String, frame: int, height_px: float, f
 
 	var slots := ec.alloc(W, H, 2 if emit_used else 1)
 	if slots.is_empty():
+		fail_n += 1
 		return [null, null, ax, ay, {}]
 	var r: Rect2i = slots[0]
 	var p: QP = ec.painter(r)
