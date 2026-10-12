@@ -1954,17 +1954,179 @@ func _draw_obstacle(p: QP, e: QP, o: Dictionary, cam: float, t: float) -> void:
 			rg2.set_color_at(1, QP.c(0, 0, 0, 0))
 			p.fill_rect(cx - rr, gy - 14 * k - rr, 2 * rr, 2 * rr, rg2)
 		p.set_mode(OVER)
-func _patrol_geom(_world: Variant, _cam: float, _t: float) -> Variant:
-	return null
-func _land_pose(_P: Variant, _cam: float, _t: float) -> Variant:
-	return null
-func _draw_landing(_pa: QP, _ea: QP, _P: Variant, _cam: float, _t: float) -> void:
-	pass
-func _patrol(_pa: QP, _ea: QP, _world: Variant, _cam: float, _t: float) -> void:
-	pass
-func _beam_rain(_pa: QP) -> void:
+# ------------------------------------------------------------------ Polizei-Suchlicht
+func _patrol_geom(world: Variant, cam: float, t: float) -> Variant:
+	var P: Variant = world.patrol
+	if P == null:
+		return null
+	var bx := Persp.screen_x(float(P["bx"]), float(P["bd"]), cam)
+	var by := Persp.ground_y(float(P["bd"]))
+	var rx := 34 * Persp.ppu(float(P["bd"]))
+	var ry := 0.13 * (Persp.ground_y(1) - Persp.ground_y(0))
+	var alt: float = P.get("alt", 1.0)
+	var sx := Persp.screen_x(float(P["x"]), 0.35, cam)
+	var sy := 46 + sin(t * 1.4) * 2.0
+	if alt >= 1.0:
+		return [P, sx, sy + 4, bx, by, rx, ry]
+	var k: Array = _land_pose(P, cam, t)
+	var x: float = k[0]
+	var yg: float = k[1]
+	var ppx: float = k[2]
+	var d: int = k[3]
+	var nx: float = Vehicles.SPIN_NOSE[0]
+	var ny: float = Vehicles.SPIN_NOSE[1]
+	return [P, x + nx * ppx * d, yg + ny * ppx, bx, by, rx, ry]
+
+
+## Bildposition eines landenden Spinners: (x, y_boden, px pro Zeichen-Einheit, d).
+func _land_pose(P: Variant, cam: float, t: float) -> Array:
+	var alt: float = P.get("alt", 1.0)
+	var u := alt * alt * (3 - 2 * alt)
+	var ppx_s := 22 * 2.4 / Vehicles.SPIN_L
+	var sx := Persp.screen_x(float(P["x"]), 0.35, cam)
+	var sy := 46 + sin(t * 1.4) * 2.0 + 10 * ppx_s
+	var D: float = Config.LAND_DEPTH
+	var ppx_g := Persp.ppu(D) * Vehicles.VEH_SCALE
+	var gx := Persp.screen_x(float(P["x"]), D, cam)
+	var gy := Persp.ground_y(D) - (0.0 if P.get("phase") == "landed" else 2.0 * sin(t * 3.0) * (1 - u))
+	return [gx + (sx - gx) * u, gy + (sy - gy) * u, ppx_g + (ppx_s - ppx_g) * u, int(P.get("face", 1))]
+
+
+## Landender/gelandeter Spinner, nach Tiefe einsortiert (mit Schatten, Spiegelung,
+## Turbinenglühen, Abwind und rot-blauem Lichtschein auf dem nassen Asphalt).
+func _draw_landing(p: QP, e: QP, P: Variant, cam: float, t: float) -> void:
+	var k: Array = _land_pose(P, cam, t)
+	var x: float = k[0]
+	var yg: float = k[1]
+	var ppx: float = k[2]
+	var d: int = k[3]
+	var D: float = Config.LAND_DEPTH
+	var gx := Persp.screen_x(float(P["x"]), D, cam)
+	var gy := Persp.ground_y(D)
+	var alt: float = P.get("alt", 1.0)
+	var L := Vehicles.SPIN_L * ppx
+	# Schatten wächst, je tiefer er kommt
+	var sh := maxf(0.0, 1.0 - alt)
+	if sh > 0.02:
+		p.set_no_pen()
+		p.set_brush(QP.c(0, 0, 0, int(140 * sh)))
+		var ww := Persp.ppu(D) * 90 * (0.6 + 0.5 * sh)
+		p.draw_ellipse(gx - ww / 2, gy - 4, ww, 8)
+	var r: Array = Vehicles.spinner_image(ppx, true, d, false)
+	var im: QImg = r[0]
+	@warning_ignore("unused_variable")
+	var em: QImg = r[1]
+	var ax: int = r[2]
+	var ayg: int = r[4]
+	if alt < 0.25:
+		p.set_opacity(minf(1.0, 0.5 * _reflk) * (1 - alt * 4))
+		p.draw_image_at(int(x) - ax, int(gy) - (im.height() - 1 - ayg) + int(gy - yg), _mirror(im))
+		p.set_opacity(1.0)
+	# Abwind: heller Luftschleier unter dem Rumpf + Gischt am Boden
+	var wash: float = P.get("wash", 0.0)
+	p.set_mode(PLUS)
+	if alt > 0.0 or wash > 0:
+		var g := QGrad.linear(x, yg - 6 * ppx, x, gy)
+		var a := int(60 * maxf(wash, 0.4 if alt < 1 else 0.0))
+		g.set_color_at(0, QP.c(200, 210, 230, a))
+		g.set_color_at(1, QP.c(200, 210, 230, 0))
+		p.set_no_pen()
+		p.set_brush(g)
+		p.draw_polygon(PackedVector2Array([Vector2(x - L * 0.3, yg - 4 * ppx), Vector2(x + L * 0.3, yg - 4 * ppx),
+			Vector2(x + L * 0.75, gy + 3), Vector2(x - L * 0.75, gy + 3)]))
+	if wash > 0.05:
+		for kk in range(3):     # Druckwellen-Ringe auf dem Wasserfilm
+			var ph := Py.mod(t * 1.6 + float(kk) / 3.0, 1.0)
+			var rw := L * (0.4 + 1.2 * ph)
+			p.set_pen(QP.c(190, 200, 230, int(90 * wash * (1 - ph))), 1)
+			p.set_no_brush()
+			p.draw_ellipse(gx - rw / 2, gy - rw * 0.06, rw, rw * 0.12)
+		p.set_no_pen()
+		if rng.random() < wash * 0.9:
+			fx.puff(rng.uniform(-40, 40), gy - 4, P["x"], D, 1.4)
+	# Rot-blauer Schein auf der nassen Straße, wenn er steht
+	if P.get("phase") == "landed":
+		var on := Py.imod(int(t * 7), 4) < 2
+		var c: Array = [224, 72, 150] if on else [90, 140, 255]
+		var rg := QGrad.radial(gx, gy, L * 0.9)
+		rg.set_color_at(0, QP.rgb(c, 55))
+		rg.set_color_at(1, QP.c(0, 0, 0, 0))
+		p.save()
+		p.translate(gx, gy)
+		p.scale(1.0, 0.3)
+		p.translate(-gx, -gy)
+		p.fill_rect(gx - L, gy - L, 2 * L, 2 * L, rg)
+		p.restore()
+	p.set_mode(OVER)
+	_spinner_sprite(p, e, x, yg, ppx, d, t, true, false, alt > 0.05)
+	if alt > 0.0:       # Turbinen glühen nach unten
+		for q: QP in [p, e]:
+			q.fill_rect(x - L * 0.32, yg - 3.6 * ppx, L * 0.5, maxf(1.0, ppx * 0.9), QP.rgb([255, 200, 140]))
+
+
+func _patrol(p: QP, e: QP, world: Variant, cam: float, t: float) -> void:
+	var g: Variant = _patrol_geom(world, cam, t)
+	_beam_poly = null
+	if g == null:
+		return
+	var arr: Array = g
+	var P: Variant = arr[0]
+	var sx: float = arr[1]
+	var sy: float = arr[2]
+	var bx: float = arr[3]
+	var by: float = arr[4]
+	var rx: float = arr[5]
+	var ry: float = arr[6]
+	var on: float = P["on"]
+	if on > 0.02:
+		var pts := PackedVector2Array([Vector2(sx - 2, sy), Vector2(bx - rx, by), Vector2(bx + rx, by),
+			Vector2(sx + 2, sy)])
+		_beam_poly = [pts, on]
+		p.set_mode(PLUS)
+		p.set_no_pen()
+		for wa: Array in [[1.0, 34], [0.55, 40]]:
+			var wf: float = wa[0]
+			var a: int = wa[1]
+			var pl := PackedVector2Array([Vector2(sx - 2, sy), Vector2(bx - rx * wf, by), Vector2(bx + rx * wf, by),
+				Vector2(sx + 2, sy)])
+			var gr := QGrad.linear(sx, sy, bx, by)
+			gr.set_color_at(0, QP.c(210, 225, 255, int(a * 2.2 * on)))
+			gr.set_color_at(1, QP.c(210, 225, 255, int(a * on)))
+			p.set_brush(gr)
+			p.draw_polygon(pl)
+		var rg := QGrad.radial(bx, by, rx)
+		rg.set_color_at(0, QP.c(230, 240, 255, int(120 * on)))
+		rg.set_color_at(0.7, QP.c(200, 220, 255, int(50 * on)))
+		rg.set_color_at(1, QP.c(0, 0, 0, 0))
+		p.save()
+		p.translate(bx, by)
+		p.scale(1.0, ry / rx)
+		p.translate(-bx, -by)
+		p.fill_rect(bx - rx, by - rx, 2 * rx, 2 * rx, rg)
+		p.restore()
+		p.set_mode(OVER)
+	if float(P.get("alt", 1.0)) < 1.0:
+		return          # steht/landet: wird nach Tiefe sortiert in _actors gezeichnet
+	# Der Spinner selbst
+	var d: int = int(P["dir"]) if P.get("leaving") else (1 if (float(P["bx"]) - float(P["x"])) >= 0 else -1)
+	_spinner_body(p, e, sx, sy - 4, 2.4, d, t, true, true)
+	# Scheinwerfer-Gondel unter dem Rumpf
+	for q: QP in [p, e]:
+		q.fill_rect(sx - 2, sy - 1, 4, 2, QP.rgb(DScene.WHITE))
+
+
+## Regentropfen im Suchlicht hell nachzeichnen (wie im Film).
+func _beam_rain(p: QP) -> void:
 	if _beam_poly == null:
 		return
+	var bp: Array = _beam_poly
+	var poly: PackedVector2Array = bp[0]
+	var on: float = bp[1]
+	p.save()
+	p.set_clip_polygon(poly)
+	p.set_mode(PLUS)
+	fx.draw_rain(p, [int(200 * on), int(210 * on), int(240 * on)])
+	p.restore()
 func _hand(_world: Variant) -> Variant:
 	return null
 func _chest(_a: Variant, _cam: float) -> Variant:
