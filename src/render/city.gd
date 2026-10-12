@@ -493,7 +493,7 @@ static func _make_sign(rng: PyRandom, color: Array, kind: String, word: Variant 
 
 ## Neon-Drache (hellblau) wie über dem White Dragon. Rückgabe [on, off, emit,
 ## Zungen-Anker]: die rote Zunge flackert live (render/scene).
-static func _dragon_sign(_rng: PyRandom) -> Array:
+static func _dragon_sign(_unused_rng: PyRandom) -> Array:
 	var w := 66
 	var h := 24
 	var col := [150, 220, 236]
@@ -583,7 +583,7 @@ var zone: int
 var th: Dictionary
 var length: float
 var seed_: int
-var rng: PyRandom
+var _rng: PyRandom
 var cam_min: float
 var cam_max: float
 var fy: int
@@ -630,7 +630,7 @@ func _init(zone_index: int, length_: float, seed__: int) -> void:
 	th = THEMES[zone_index % THEMES.size()]
 	length = length_
 	seed_ = seed__
-	rng = PyRandom.new(seed_ * 7919 + zone_index * 104729)
+	_rng = PyRandom.new(seed_ * 7919 + zone_index * 104729)
 	cam_min = -120.0
 	cam_max = length + 220.0
 	fy = int(Persp.FACADE_Y)
@@ -670,10 +670,10 @@ func _cloud_bank() -> void:
 	bank = _bake(w, h, func(p: QP) -> void:
 		p.set_no_pen()
 		for _i in 46:
-			var cx := rng.uniform(0, w)
-			var cy := rng.uniform(h * 0.15, h * 0.9)
-			var r := rng.uniform(70, 180)
-			var a := int(rng.uniform(0.55, 1.0) * 150)
+			var cx := _rng.uniform(0, w)
+			var cy := _rng.uniform(h * 0.15, h * 0.9)
+			var r := _rng.uniform(70, 180)
+			var a := int(_rng.uniform(0.55, 1.0) * 150)
 			for ox: int in [-w, 0, w]:
 				var g := QGrad.radial(cx + ox, cy, r)
 				g.set_color_at(0.0, qc(col, a))
@@ -727,10 +727,10 @@ func _fog_tex() -> void:
 		var img := _bake(w, h, func(p: QP) -> void:
 			p.set_no_pen()
 			for _i in n:
-				var cx := rng.uniform(0, w)
-				var cy := rng.uniform(h * 0.25, h * 0.8)
-				var r := rng.uniform(rmin, rmax)
-				var a := int(rng.uniform(0.35, 1.0) * amax)
+				var cx := _rng.uniform(0, w)
+				var cy := _rng.uniform(h * 0.25, h * 0.8)
+				var r := _rng.uniform(rmin, rmax)
+				var a := int(_rng.uniform(0.35, 1.0) * amax)
 				for ox: int in [-w, 0, w]:
 					var g := QGrad.radial(cx + ox, cy, r)
 					g.set_color_at(0, qc(col, a))
@@ -752,15 +752,15 @@ func _air() -> void:
 	for i in n_lanes:
 		var is_far := i % 2 == 0
 		var d := {}
-		d["y"] = rng.uniform(26, fy * (0.45 if is_far else 0.62))
-		d["speed"] = rng.uniform(8, 16) if is_far else rng.uniform(18, 34)
-		d["dir"] = rng.choice([-1, 1])
+		d["y"] = _rng.uniform(26, fy * (0.45 if is_far else 0.62))
+		d["speed"] = _rng.uniform(8, 16) if is_far else _rng.uniform(18, 34)
+		d["dir"] = _rng.choice([-1, 1])
 		d["fac"] = FAR_F if is_far else MID_F
-		d["n"] = rng.randint(5, 10)
-		d["gap"] = rng.uniform(28, 70)
-		d["ph"] = rng.uniform(0, 400)
+		d["n"] = _rng.randint(5, 10)
+		d["gap"] = _rng.uniform(28, 70)
+		d["ph"] = _rng.uniform(0, 400)
 		d["size"] = 1 if is_far else 2
-		d["slope"] = rng.uniform(-0.03, 0.03)
+		d["slope"] = _rng.uniform(-0.03, 0.03)
 		air.append(d)
 
 
@@ -785,14 +785,14 @@ func _clouds() -> void:
 		var img := _bake(cw, 150, func(p: QP) -> void:
 			p.set_no_pen()
 			for _i in 90:
-				var cx := rng.uniform(0, cw)
-				var cy := rng.uniform(y0, y1)
-				var rw := rng.uniform(30, 120)
-				var rh := rng.uniform(4, 14)
+				var cx := _rng.uniform(0, cw)
+				var cy := _rng.uniform(y0, y1)
+				var rw := _rng.uniform(30, 120)
+				var rh := _rng.uniform(4, 14)
 				var lit := (cy - y0) / maxf(1, (y1 - y0))
-				var col := mix(th["cloud"], th["cloud_lit"], lit * 0.8 * rng.uniform(0.5, 1.0))
+				var col := mix(th["cloud"], th["cloud_lit"], lit * 0.8 * _rng.uniform(0.5, 1.0))
 				for ox: int in [-cw, 0, cw]:
-					p.set_brush(qc(col, int(a * rng.uniform(0.4, 1.0))))
+					p.set_brush(qc(col, int(a * _rng.uniform(0.4, 1.0))))
 					p.draw_ellipse(cx + ox - rw / 2, cy - rh / 2, rw, rh))
 		cloud_layers.append([img, 6.0 + li * 5.0, CLOUD_F * (1 + li)])
 
@@ -808,38 +808,38 @@ func _far() -> void:
 	lay.img = _bake(lay.width, lay.height, func(p: QP) -> void:
 		var x := 0
 		while x < lay.width:
-			var bw := rng.randint(14, 46)
-			var bh := rng.randint(far_h[0], far_h[1])
+			var bw := _rng.randint(14, 46)
+			var bh := _rng.randint(far_h[0], far_h[1])
 			var top := base - bh
-			var col := mul(fc, rng.uniform(0.75, 1.15))
+			var col := mul(fc, _rng.uniform(0.75, 1.15))
 			p.fill_rect(x, top, bw, bh, qc(col))
-			if rng.random() < 0.4:
-				p.fill_rect(x + Py.ifloordiv(bw, 4), top - rng.randint(3, 10), maxi(2, Py.ifloordiv(bw, 3)), 10, qc(col))
-			if rng.random() < 0.3:
-				var ax := x + rng.randint(2, bw - 2)
-				var ah := rng.randint(6, 20)
+			if _rng.random() < 0.4:
+				p.fill_rect(x + Py.ifloordiv(bw, 4), top - _rng.randint(3, 10), maxi(2, Py.ifloordiv(bw, 3)), 10, qc(col))
+			if _rng.random() < 0.3:
+				var ax := x + _rng.randint(2, bw - 2)
+				var ah := _rng.randint(6, 20)
 				p.fill_rect(ax, top - ah, 1, ah, qc(col))
-				blinks.append(["far", ax + lay.lmin, top - ah, CRIMSON, rng.random() * 3])
+				blinks.append(["far", ax + lay.lmin, top - ah, CRIMSON, _rng.random() * 3])
 			for wy in range(top + 3, base - 2, 4):
 				for wx in range(x + 2, x + bw - 1, 3):
-					if rng.random() < lit_f * 0.35:
-						p.fill_rect(wx, wy, 1, 1, qc(mix(col, _wchoice(rng, win), 0.45)))
-			x += bw + rng.randint(-4, 6)
+					if _rng.random() < lit_f * 0.35:
+						p.fill_rect(wx, wy, 1, 1, qc(mix(col, _wchoice(_rng, win), 0.45)))
+			x += bw + _rng.randint(-4, 6)
 		# Raffinerie-Schlote mit Fackeln (Hades-Landschaft)
 		if th["flames"]:
 			for _i in int(lay.width / 260.0) + 2:
-				var sx := rng.randint(0, lay.width)
-				var sh := rng.randint(70, 140)
+				var sx := _rng.randint(0, lay.width)
+				var sh := _rng.randint(70, 140)
 				p.fill_rect(sx, base - sh, 3, sh, qc(mul(fc, 0.7)))
 				p.fill_rect(sx - 1, base - sh, 5, 2, qc(mul(fc, 0.6)))
-				flames.append([sx + 1 + lay.lmin, base - sh - 1, rng.random() * 10, rng.uniform(0.7, 1.4)])
+				flames.append([sx + 1 + lay.lmin, base - sh - 1, _rng.random() * 10, _rng.uniform(0.7, 1.4)])
 		if th["pyramid"]:
 			# Zwei Tyrell-Pyramiden; die große steht in Richtung Zonenende
 			for ws: Array in [[length * 0.85, 1.25], [length * 0.4, 0.8], [length * 0.05, 0.6]]:
 				var wx: float = ws[0]
 				var size: float = ws[1]
 				var L := int(wx * FAR_F) - lay.lmin + Py.ifloordiv(W, 4)
-				_pyramid(p, rng, L, base, int(230 * size), int(150 * size)))
+				_pyramid(p, _rng, L, base, int(230 * size), int(150 * size)))
 	far = lay
 
 
@@ -882,56 +882,56 @@ func _mid() -> void:
 		var x := 0
 		var tops: Array = []
 		while x < lay.width:
-			var bw := rng.randint(24, 70)
-			var bh := rng.randint(mid_h[0], mid_h[1])
+			var bw := _rng.randint(24, 70)
+			var bh := _rng.randint(mid_h[0], mid_h[1])
 			var top := base - bh
-			var col := mul(mc, rng.uniform(0.8, 1.25))
+			var col := mul(mc, _rng.uniform(0.8, 1.25))
 			p.fill_rect(x, top, bw, bh, qc(col))
 			p.fill_rect(x, top, 1, bh, qc(mul(col, 1.35)))
 			# Stufen (Wedding-cake)
 			var top2: int
-			if rng.random() < 0.45:
-				var sw := int(bw * rng.uniform(0.4, 0.7))
-				var sh := rng.randint(10, 40)
+			if _rng.random() < 0.45:
+				var sw := int(bw * _rng.uniform(0.4, 0.7))
+				var sh := _rng.randint(10, 40)
 				p.fill_rect(x + Py.ifloordiv(bw - sw, 2), top - sh, sw, sh, qc(col))
 				top2 = top - sh
 			else:
 				top2 = top
 			# Fenster
-			var wc: Array = _wchoice(rng, win)
+			var wc: Array = _wchoice(_rng, win)
 			for wy in range(top + 4, base - 2, 4):
 				for wx in range(x + 3, x + bw - 2, 3):
-					var r := rng.random()
+					var r := _rng.random()
 					if r < lit_f * 0.8:
-						var wcol: Array = wc if rng.random() < 0.7 else _wchoice(rng, win)
+						var wcol: Array = wc if _rng.random() < 0.7 else _wchoice(_rng, win)
 						p.fill_rect(wx, wy, 1, 2, qc(mix(col, wcol, 0.6)))
 			# Antenne + Warnlicht
-			if rng.random() < 0.55:
-				var ax := x + rng.randint(3, bw - 3)
-				var ah := rng.randint(8, 26)
+			if _rng.random() < 0.55:
+				var ax := x + _rng.randint(3, bw - 3)
+				var ah := _rng.randint(8, 26)
 				p.fill_rect(ax, top2 - ah, 1, ah, qc(mul(col, 0.9)))
-				var bc: Array = CRIMSON if rng.random() < 0.7 else MAGENTA
-				blinks.append(["mid", ax + lay.lmin, top2 - ah, bc, rng.random() * 3])
+				var bc: Array = CRIMSON if _rng.random() < 0.7 else MAGENTA
+				blinks.append(["mid", ax + lay.lmin, top2 - ah, bc, _rng.random() * 3])
 			tops.append([x, top2, bw])
 			# Holo-Billboards
-			if n_bb and rng.random() < 0.09 * n_bb and bh > 80:
-				var bb: Array = rng.choice([[30, 40], [40, 28], [24, 52], [52, 30]])
+			if n_bb and _rng.random() < 0.09 * n_bb and bh > 80:
+				var bb: Array = _rng.choice([[30, 40], [40, 28], [24, 52], [52, 30]])
 				var bbw: int = bb[0]
 				var bbh: int = bb[1]
 				var bbx := x + Py.ifloordiv(bw - bbw, 2)
-				var bby := top + rng.randint(6, maxi(7, Py.ifloordiv(bh, 3)))
+				var bby := top + _rng.randint(6, maxi(7, Py.ifloordiv(bh, 3)))
 				p.fill_rect(bbx - 1, bby - 1, bbw + 2, bbh + 2, qc(VOID))
-				billboards.append([bbx + lay.lmin, bby, bbw, bbh, rng.randint(0, 99)])
-			x += bw + rng.randint(-6, 10)
+				billboards.append([bbx + lay.lmin, bby, bbw, bbh, _rng.randint(0, 99)])
+			x += bw + _rng.randint(-6, 10)
 		if th["cranes"]:
 			for _i in int(lay.width / 220.0) + 1:
-				var cx := rng.randint(0, lay.width)
-				_crane(p, lay, rng, cx, base)
+				var cx := _rng.randint(0, lay.width)
+				_crane(p, lay, _rng, cx, base)
 		# Suchscheinwerfer-Ursprünge (von Dächern, schwenken über den Himmel)
 		for _i in maxi(1, int(th["searchlights"])) * int(lay.width / 520.0 + 1):
-			var sx := rng.randint(0, lay.width) + lay.lmin
-			var sy := base - rng.randint(30, 110)
-			searchlights.append([sx, sy, rng.uniform(0.18, 0.45), rng.random() * 6.28]))
+			var sx := _rng.randint(0, lay.width) + lay.lmin
+			var sy := base - _rng.randint(30, 110)
+			searchlights.append([sx, sy, _rng.uniform(0.18, 0.45), _rng.random() * 6.28]))
 	mid = lay
 
 
@@ -966,38 +966,38 @@ func _facade() -> void:
 	var pair := _bake_pair(fac.width, fy + 1, func(p: QP, e: QP) -> void:
 		var x := 0
 		while x < fac.width:
-			var r := rng.random()
+			var r := _rng.random()
 			var alley := r < 0.12
-			var bw := rng.randint(18, 40) if alley else (
-				rng.randint(60, 150) if style != "harbor" else rng.randint(50, 110))
+			var bw := _rng.randint(18, 40) if alley else (
+				_rng.randint(60, 150) if style != "harbor" else _rng.randint(50, 110))
 			# Ausgang/Tor am Zonenende frei halten
 			if not gate_done and x + bw > gate_l:
 				bw = gate_l - x
 				if bw >= 12:
-					_building(p, e, fac, rng, x, bw, rng.randint(int(th["h_range"][0]), int(th["h_range"][1])), base)
+					_building(p, e, fac, _rng, x, bw, _rng.randint(int(th["h_range"][0]), int(th["h_range"][1])), base)
 				_exit_gate(p, e, fac, gate_l, base)
 				gate_done = true
 				x = gate_r
 				continue
 			if alley:
-				_alley(p, e, fac, rng, x, bw, base)
+				_alley(p, e, fac, _rng, x, bw, base)
 			else:
-				var bh := rng.randint(int(th["h_range"][0]), int(th["h_range"][1]))
-				if style == "harbor" and rng.random() < 0.5:
-					_containers(p, e, fac, rng, x, bw, base)
+				var bh := _rng.randint(int(th["h_range"][0]), int(th["h_range"][1]))
+				if style == "harbor" and _rng.random() < 0.5:
+					_containers(p, e, fac, _rng, x, bw, base)
 				else:
-					_building(p, e, fac, rng, x, bw, bh, base)
+					_building(p, e, fac, _rng, x, bw, bh, base)
 			x += bw
 		# Laternen
-		var lx := cam_min + rng.uniform(20, 80)
+		var lx := cam_min + _rng.uniform(20, 80)
 		while lx < cam_max:
 			var L := lx * fac.factor
-			var arm := rng.randint(10, 18)
-			var y := base - rng.randint(46, 60)
+			var arm := _rng.randint(10, 18)
+			var y := base - _rng.randint(46, 60)
 			_lamp_post(p, fac.lx(L), y, base, arm)
-			lamps.append(Lamp.new(lx, L, y, arm, th["lamp"], rng.randint(0, 9999), rng.random() < 0.18))
-			lx += rng.uniform(float(th["lamp_every"][0]), float(th["lamp_every"][1]))
-		_street_props(p, e, fac, rng, base)
+			lamps.append(Lamp.new(lx, L, y, arm, th["lamp"], _rng.randint(0, 9999), _rng.random() < 0.18))
+			lx += _rng.uniform(float(th["lamp_every"][0]), float(th["lamp_every"][1]))
+		_street_props(p, e, fac, _rng, base)
 		# Nudelstände an den deterministischen Positionen (Herzen auffüllen)
 		for rx: float in Procgen.ramen_positions(length, seed_, zone):
 			var blx := fac.lx(rx * fac.factor) - 88
@@ -1443,6 +1443,7 @@ func _ramen_booth(p: QP, e: QP, fac: Layer, x: float, base: float) -> void:
 	## Nudelbar im Stil des White Dragon (Blade Runner): offene Theke mit Hockern,
 	## Gäste von hinten, Koch hinter dem Tresen, Menü-Täfelchen, nackte Glühbirnen,
 	## Noren, rote Papierlaternen, Plastikvorhänge, Neon-Drache auf dem Dach.
+	var rng := _rng
 	var w := 176
 	var L0 := fac.lmin + x
 	var roof := base - 62                     # Oberkante Vordach
@@ -1531,7 +1532,7 @@ func _ramen_booth(p: QP, e: QP, fac: Layer, x: float, base: float) -> void:
 	p.fill_rect(x + 4, base - 4, w - 8, 1, qc([150, 154, 166]))
 	# Hocker + Gäste (von hinten). Der Hocker in der Mitte bleibt frei
 	var n := 6
-	var free := n / 2
+	var free := Py.ifloordiv(n, 2)
 	var xs: Array = []
 	for i in n:
 		xs.append(x + 16 + i * Py.ifloordiv(int(w - 32), n - 1))
@@ -1712,7 +1713,7 @@ func _alley(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, base: 
 		e.fill_rect(x + Py.ifloordiv(int(bw), 2) - 1, base - 70, 2, 30, qc(mul(c, 0.6)))
 
 
-func _containers(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, base: float) -> void:
+func _containers(p: QP, _e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, base: float) -> void:
 	var cols := [[110, 40, 40], [40, 70, 90], [90, 80, 50], [50, 60, 70], [30, 70, 70]]
 	var y := base
 	var n := rng.randint(2, 5)
@@ -1735,7 +1736,7 @@ func _containers(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, b
 		blinks.append(["fac", fac.lmin + x + Py.ifloordiv(int(bw), 2), y - 2, AMBER, rng.random() * 3])
 
 
-func _exit_gate(p: QP, e: QP, fac: Layer, x: float, base: float) -> void:
+func _exit_gate(p: QP, _e: QP, fac: Layer, x: float, base: float) -> void:
 	var col := mul(th["building"], 1.3)
 	p.fill_rect(x, 0, 120, base, qc(mul(col, 0.8)))
 	p.fill_rect(x + 20, base - 70, 80, 70, qc(VOID))
@@ -1776,9 +1777,9 @@ func _ground() -> void:
 		p.fill_rect(0, curb_row + 1, gw, rows - curb_row - 1, qc(asph, 205))
 		var ns := int(gw * rows / 60.0)
 		for _i in ns:
-			var gx := rng.randrange(gw)
-			var gy := rng.randrange(curb_row + 1, rows)
-			p.fill_rect(gx, gy, rng.choice([1, 2, 3]), 1, qc(mul(asph, rng.choice([0.6, 1.35, 1.6])), 220))
+			var gx := _rng.randrange(gw)
+			var gy := _rng.randrange(curb_row + 1, rows)
+			p.fill_rect(gx, gy, _rng.choice([1, 2, 3]), 1, qc(mul(asph, _rng.choice([0.6, 1.35, 1.6])), 220))
 		# Rinnstein (nass)
 		p.fill_rect(0, curb_row + 1, gw, 2, qc(mul(asph, 0.5), 120))
 		# Fahrbahnmarkierung
@@ -1786,17 +1787,17 @@ func _ground() -> void:
 		for wx in range(int(wmin), int(wmax), 70):
 			p.fill_rect(int((wx - wmin) * TPU), lane, int(34 * TPU), 2, qc(mul(ASH, 0.55), 230))
 		# Zebrastreifen
-		var cw_x := wmin + rng.uniform(200, 500)
+		var cw_x := wmin + _rng.uniform(200, 500)
 		while cw_x < wmax:
 			for k in 7:
 				var sx := int((cw_x + k * 9 - wmin) * TPU)
 				p.fill_rect(sx, curb_row + 3, int(5 * TPU), rows - curb_row - 3, qc(mul(ASH, 0.3), 140))
-			cw_x += rng.uniform(700, 1300)
+			cw_x += _rng.uniform(700, 1300)
 		# Kanaldeckel (mit Dampf)
 		manholes = []
-		var mx := wmin + rng.uniform(80, 200)
+		var mx := wmin + _rng.uniform(80, 200)
 		while mx < wmax:
-			var d := rng.uniform(0.2, 0.85)
+			var d := _rng.uniform(0.2, 0.85)
 			var rr := int(Persp.ground_y(d) - y0)
 			p.set_no_pen()
 			p.set_brush(qc(mul(asph, 0.55)))
@@ -1804,15 +1805,15 @@ func _ground() -> void:
 			p.set_brush(qc(mul(asph, 1.5)))
 			p.draw_ellipse(int((mx - wmin) * TPU) - 11, rr - 2, 22, 4)
 			manholes.append([mx, d])
-			mx += rng.uniform(260, 520)
+			mx += _rng.uniform(260, 520)
 		# Pfützen: fast transparent -> Spiegelung kommt durch
 		puddles = []
 		var np := int((wmax - wmin) / 11.0)
 		for _i in np:
-			var px_ := rng.uniform(0, gw)
-			var r := rng.randint(curb_row + 3, rows - 2)
-			var pw := rng.uniform(24, 92) * (0.5 + r / float(rows))
-			var ph := maxf(3, int(rng.uniform(3.0, 7.0) * (0.6 + r / float(rows))))
+			var px_ := _rng.uniform(0, gw)
+			var r := _rng.randint(curb_row + 3, rows - 2)
+			var pw := _rng.uniform(24, 92) * (0.5 + r / float(rows))
+			var ph := maxf(3, int(_rng.uniform(3.0, 7.0) * (0.6 + r / float(rows))))
 			p.set_mode(QP.SOURCE)
 			p.set_brush(qc([26, 34, 52], 70))
 			p.draw_ellipse(px_, r, pw, ph)
@@ -1825,12 +1826,12 @@ func _ground() -> void:
 		p.set_pen(qc(mul(asph, 0.55), 220), 1.0)
 		var nc := int((wmax - wmin) / 40.0)
 		for _i in nc:
-			var cx_ := rng.uniform(0, gw)
-			var cy_ := rng.randint(curb_row + 3, rows - 2)
-			var nk := rng.randint(2, 5)
+			var cx_ := _rng.uniform(0, gw)
+			var cy_ := float(_rng.randint(curb_row + 3, rows - 2))
+			var nk := _rng.randint(2, 5)
 			for _k in nk:
-				var nx := cx_ + rng.uniform(-14, 14)
-				var ny := cy_ + rng.uniform(-2, 2)
+				var nx := cx_ + _rng.uniform(-14, 14)
+				var ny := cy_ + _rng.uniform(-2, 2)
 				p.draw_line(cx_, cy_, nx, ny)
 				cx_ = nx
 				cy_ = ny)
