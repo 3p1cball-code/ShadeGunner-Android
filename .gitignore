@@ -11,3 +11,8 @@
 # Sonstiges
 .DS_Store
 shots/
+
+# Rohdaten des Audio-Builds (tools/build_audio.py)
+tools/audio_build/
+tools/audio_render/
+__pycache__/
