@@ -68,6 +68,7 @@ class Atlas:
 	var _row_h := 0
 	var _pending: Array = []        # Painter, die nach diesem Frame geleert werden
 	var _cleared_frame := -1
+	var _commit_frame := -1         # Frame-Zähler beim letzten commit()
 	var full_resets := 0
 
 	func setup(parent: Node, sz: int) -> void:
@@ -127,17 +128,22 @@ class Atlas:
 		if vp.render_target_clear_mode != SubViewport.CLEAR_MODE_ONCE:
 			vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
 		vp.render_target_update_mode = SubViewport.UPDATE_ONCE
+		_commit_frame = Engine.get_frames_drawn()
 
-	## Einmal pro Frame aufrufen (vor dem Zeichnen neuer Einträge): Painter des
-	## vorigen Frames freigeben - ihre Pixel stehen jetzt im Atlas.
+	## Einmal pro Frame aufrufen (vor dem Zeichnen neuer Einträge): Painter
+	## freigeben, sobald seit dem letzten commit() ein Frame gezeichnet wurde -
+	## ihre Pixel stehen dann im Atlas. (Godot setzt render_target_update_mode
+	## nach UPDATE_ONCE NICHT auf DISABLED zurück; deshalb zählen wir Frames.)
 	func frame_start() -> void:
 		var f := Engine.get_frames_drawn()
 		if f == _cleared_frame:
 			return
 		_cleared_frame = f
-		if not _pending.is_empty() and vp.render_target_update_mode == SubViewport.UPDATE_DISABLED:
+		if not _pending.is_empty() and _commit_frame >= 0 and f > _commit_frame:
 			for p in _pending:
 				(p as QP).end()
 				(p as QP).free_all()
 			_pending.clear()
+			_commit_frame = -1
+			vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
 			vp.render_target_clear_mode = SubViewport.CLEAR_MODE_NEVER
