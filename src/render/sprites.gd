@@ -173,6 +173,11 @@ static func _limb(origin: Vector2, a: float, l: float) -> Vector2:
 # ---------------------------------------------------------------------------- Zeichnen
 
 static func _pen(p: QP, col: Array, w: float, alpha: float = 255.0) -> void:
+	# Qt zeichnet Stifte <= 1 Gerätepixel mit dem Cosmetic-Stroker und Deckkraft
+	# int(256 * Breite * Skala) / 256 (QCosmeticStroker::setup); QP nicht -> hier nachbilden.
+	var spx := w * sqrt(absf(p.transform().determinant()))
+	if w > 0.0 and spx <= 1.0:
+		alpha = alpha * clampi(int(256.0 * spx), 0, 256) / 256.0
 	p.set_pen(QP.rgb(col, alpha), w, QP.CAP_ROUND)
 
 
