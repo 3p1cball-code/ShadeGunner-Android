@@ -16,3 +16,6 @@ shots/
 tools/audio_build/
 tools/audio_render/
 __pycache__/
+
+# Godot generiert .uid-Dateien neu
+*.uid
