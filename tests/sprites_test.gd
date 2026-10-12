@@ -23,6 +23,8 @@ func _ready() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--dir="):
 			dir = a.substr(6)
+		elif a.begins_with("--atlas-size="):
+			Sprites.atlas_size = int(a.substr(13))
 	var baker := Baker.new()
 	add_child(baker)
 	Sprites.baker = baker
@@ -56,18 +58,18 @@ func _process(_d: float) -> void:
 		_bake(results.size(), (data["cases"] as Array).size())
 	if frame < 8:
 		return
-	var gen: Variant = Sprites._gens[Sprites._cur]
-	var raw_img: Image = (gen.raw as Baker.Atlas).texture().get_image()
-	var fin_img: Image = (gen.fin as Baker.Atlas).texture().get_image()
-	if OS.get_cmdline_user_args().has("--atlas"):
-		raw_img.save_png(dir + "/atlas_raw.png")
-		fin_img.save_png(dir + "/atlas_fin.png")
+	# Bild je Atlas-Textur (bei Atlas-Wechsel liegen Einträge in beiden Paaren)
+	var imgs := {}
+	for gen: Variant in Sprites._gens:
+		for at: Baker.Atlas in [gen.raw, gen.fin]:
+			imgs[at.texture()] = at.texture().get_image()
+	print("Atlas-Paare: ", Sprites._gens.size(), "  aktuell: ", Sprites._cur)
 	var meta: Array = []
 	for i in results.size():
 		var r: Array = results[i]
-		_cut(r[0], fin_img).save_png("%s/gd_%d.png" % [dir, i])
+		_cut(r[0], imgs[(r[0] as QImg).tex]).save_png("%s/gd_%d.png" % [dir, i])
 		if r[1] != null:
-			_cut(r[1], raw_img).save_png("%s/gd_%d_e.png" % [dir, i])
+			_cut(r[1], imgs[(r[1] as QImg).tex]).save_png("%s/gd_%d_e.png" % [dir, i])
 		var m: Dictionary = r[4]
 		var e: Vector2 = m["eye"]
 		var h: Vector2 = m["hand"]
