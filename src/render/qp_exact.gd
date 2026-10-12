@@ -11,7 +11,7 @@ extends QP
 ##     Segmente ohne Kappen + Bevel-Join (Qt-Standard), Kappen nur an offenen Enden.
 ##  4. draw_image: Zielpixel per Pixelmitte wie bei Formen (+eps).
 
-static var eps := 1.0 / 128.0
+static var eps := 1.0 / 256.0     # = GPU-Subpixelraster (8 Bit); feiner wirkt nicht mehr
 
 
 func _gx() -> Transform2D:
