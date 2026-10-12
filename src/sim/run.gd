@@ -2,7 +2,7 @@ class_name Run
 extends RefCounted
 ## Zustand, der über Zonen hinweg erhalten bleibt (sim.Run).
 
-var seed_: int = 0
+var seed: int = 0
 var difficulty: String = "normal"
 var density: float = 1.0
 var score: int = 0
@@ -17,7 +17,7 @@ var mods: Dictionary = {}
 
 
 func _init(seed_value: int = 0, difficulty_: String = "normal") -> void:
-	seed_ = seed_value
+	seed = seed_value
 	difficulty = difficulty_ if Config.DIFFICULTY.has(difficulty_) else "normal"
 	density = float(Config.DIFFICULTY[difficulty]["density"])
 	score = 0
