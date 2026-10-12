@@ -862,130 +862,323 @@ func _fog_band(p: QP) -> void:
 
 
 # ====================================================================== TEIL B/C
-# Platzhalter mit der Signatur des Originals (Parameter mit "_" bis zum Port,
-# sonst schlagen unused_parameter-Warnungen als Fehler an).
 
-func _ramen(_p_: QP, _e_: QP, _world: Variant, _cam: float, _t: float, _dt: float) -> void:
-	pass  # TEIL B/C
+## Nudelbar lebt: Lichtpool auf dem nassen Asphalt, Glühbirnen, Laternen,
+## Koch mit Nudelsieb, flackernde Drachenzunge, Tropfen vom Vordach, Dampf.
+func _ramen(p: QP, e: QP, world: Variant, cam: float, t: float, dt: float) -> void:
+	var fac: City.Layer = city.facade
+	var spots: Array = world.ramen
+	var pl: Variant = world.player
+	var lv_dark := 1.0 - 0.55 * dark
+	p.set_no_pen()
+	for sp: Dictionary in city.ramen_spots:
+		var x0: float = fac.screen_x(float(sp["L"]), cam)
+		if x0 < -240 or x0 > W + 60:
+			continue
+		var base: float = sp["base"]
+		var spw: float = sp["w"]
+		var cxw := (float(sp["L"]) + spw / 2) / fac.factor
+		var r: Variant = null
+		for rr: Dictionary in spots:
+			if absf(float(rr["x"]) - cxw) < 6:
+				r = rr
+				break
+		var used := r != null and bool(r["used"])
+		# Lichtpool auf der Straße (breit, warm) + Lichtkegel der Birnen
+		p.set_mode(PLUS)
+		var gx := Persp.screen_x(cxw, 0.16, cam)
+		var gy := Persp.ground_y(0.16)
+		var g := QGrad.radial(gx, gy, 110)
+		g.set_color_at(0.0, QP.rgb([255, 150, 60], int(62 * lv_dark)))
+		g.set_color_at(0.5, QP.rgb([255, 110, 40], int(22 * lv_dark)))
+		g.set_color_at(1.0, QP.c(0, 0, 0, 0))
+		p.save()
+		p.translate(gx, gy)
+		p.scale(1.0, 0.28)
+		p.translate(-gx, -gy)
+		p.fill_rect(gx - 110, gy - 110, 220, 220, g)
+		p.restore()
+		for i in range((sp["bulbs"] as Array).size()):
+			var bb: Array = sp["bulbs"][i]
+			var bl: float = bb[0]
+			var by: float = bb[1]
+			var bx: float = fac.screen_x(bl, cam)
+			var fl := 0.2 if (i == 2 and Scene._hash(int(t * 15), int(bl)) < 0.12) else 1.0
+			var rg := QGrad.radial(bx, by + 1, 18)
+			rg.set_color_at(0, QP.rgb([255, 206, 140], int(55 * fl * lv_dark)))
+			rg.set_color_at(1, QP.c(0, 0, 0, 0))
+			p.fill_rect(bx - 18, by - 17, 36, 36, rg)
+			if fl < 1.0:        # Wackelkontakt: Birne kurz aus
+				p.set_mode(OVER)
+				p.fill_rect(bx - 1, by, 3, 3, QP.rgb([70, 50, 30]))
+				p.set_mode(PLUS)
+		for ll_: Array in sp["lanterns"]:
+			var ll: float = ll_[0]
+			var ly: float = ll_[1]
+			var lx: float = fac.screen_x(ll, cam)
+			var rg2 := QGrad.radial(lx, ly, 16)
+			rg2.set_color_at(0, QP.rgb([255, 60, 60], int(50 * lv_dark)))
+			rg2.set_color_at(1, QP.c(0, 0, 0, 0))
+			p.fill_rect(lx - 16, ly - 16, 32, 32, rg2)
+		p.set_mode(OVER)
+		# Koch: grüßt, wenn der Blade Runner herankommt; reicht beim Essen die Schale
+		var near: bool = r != null and absf(float(pl.x) - float(r["x"])) < 70 and float(pl.depth) < 0.7
+		var serving: bool = r != null and float(r["t"]) > 0.05 and not used
+		_cook(p, e, fac.screen_x(float(sp["cook"]), cam), base, t, near and not serving, serving)
+		if used:   # leere Schale am freien Platz
+			var cx := int(fac.screen_x(float(sp["cook"]), cam))
+			p.fill_rect(cx - 2, base - 20, 5, 2, QP.rgb([200, 202, 210]))
+		# Drachenzunge (rot, flackert wie im Film)
+		var tng: Array = sp["tongue"]
+		var tx := int(fac.screen_x(float(tng[0]), cam))
+		var ty: float = tng[1]
+		if Scene._hash(int(t * 11), int(float(tng[0]))) > 0.35 and dark < 0.4:
+			for q: QP in [p, e]:
+				q.fill_rect(tx - 3, ty, 3, 1, QP.rgb([255, 50, 70]))
+				q.fill_rect(tx - 4, ty - 1, 1, 1, QP.rgb([255, 50, 70]))
+				q.fill_rect(tx - 4, ty + 1, 1, 1, QP.rgb([255, 50, 70]))
+		# Wok-Flamme
+		var wk: Array = sp["wok"]
+		var wx: float = fac.screen_x(float(wk[0]), cam)
+		var wy: float = wk[1]
+		var fh := 2 + 3 * Scene._hash(int(t * 20), int(float(wk[0])))
+		for q: QP in [p, e]:
+			q.fill_rect(wx - 6, wy + 4, 12, 1, QP.rgb([90, 140, 255]))
+			q.fill_rect(wx - 4, wy + 4 - fh, 2, fh, QP.rgb(DScene.AMBER))
+			q.fill_rect(wx + 2, wy + 5 - fh, 2, fh - 1, QP.rgb(DScene.AMBER))
+		# Tropfen vom Vordach
+		var lip: float = sp["lip"]
+		var fall := base - lip - 2
+		for k in range((sp["drips"] as Array).size()):
+			var dl: float = sp["drips"][k]
+			var ph := Py.mod(t * 0.9 + Scene._hash(k, int(float(sp["L"]))) * 7.0, 1.0)
+			var dx := int(fac.screen_x(dl, cam))
+			if ph < 0.7:
+				var y := lip + fall * pow(ph / 0.7, 2.0)
+				p.fill_rect(dx, int(y), 1, 2, QP.rgb([170, 182, 204]))
+			elif ph < 0.8:
+				p.fill_rect(dx - 1, base - 1, 3, 1, QP.rgb([150, 160, 186]))
+		# Dampf: Suppentopf, Wok, Schalen
+		if rng.random() < dt * 4.0:
+			var pot: Array = sp["pot"]
+			fx.puff(float(pot[0]) + rng.uniform(-6, 6), pot[1], null, null, 0.8)
+		if rng.random() < dt * 1.5:
+			fx.puff(wx + rng.uniform(-3, 3), wy - 2, null, null, 0.6)
+		for bl_ in (sp.get("bowls", []) as Array):
+			if rng.random() < dt * 0.5:
+				fx.puff(bl_, base - 22, null, null, 0.4)
 
 
-func _cook(_p_: QP, _e_: QP, _cx: float, _base: float, _t: float, _greet: Variant, _serving: Variant) -> void:
-	pass  # TEIL B/C
+## Koch hinter der Theke: weiße Jacke, Stirnband, schüttelt das Nudelsieb.
+func _cook(p: QP, _ea: QP, cx: float, base: float, t: float, greet: bool, serving: bool) -> void:
+	var x := int(cx + sin(t * 1.3) * 2)
+	var top_c := base - 18
+	var jacket := [214, 196, 170]
+	var shade := [150, 126, 100]
+	var skin := [150, 104, 72]
+	p.set_no_pen()
+	p.fill_rect(x - 5, base - 31, 10, top_c - base + 31, QP.rgb(jacket))
+	p.fill_rect(x - 5, base - 31, 2, top_c - base + 31, QP.rgb(shade))
+	p.fill_rect(x - 1, base - 31, 2, 2, QP.rgb(skin))
+	p.set_brush(QP.rgb(skin))
+	p.draw_ellipse(x - 3, base - 38, 7, 8)
+	p.fill_rect(x - 3, base - 38, 7, 2, QP.rgb([30, 24, 20]))
+	p.fill_rect(x - 4, base - 36, 9, 1, QP.rgb([240, 240, 244]))
+	p.fill_rect(x - 3, base - 38, 7, 1, QP.rgb(Scene.mix([30, 24, 20], DScene.AMBER, 0.5)))
+	if greet:          # winkt: „Irasshai!“
+		var a := -1.9 + 0.35 * sin(t * 9)
+		var sx := x + 4.0
+		var sy := base - 31
+		var hx := sx + cos(a) * 7
+		var hy := sy + sin(a) * 7
+		p.set_pen(QP.rgb(jacket), 2)
+		p.draw_line(sx, sy, hx, hy)
+		p.set_no_pen()
+		p.fill_rect(hx - 1, hy - 2, 3, 3, QP.rgb(skin))
+	elif serving:      # reicht die Schale über den Tresen
+		p.set_pen(QP.rgb(jacket), 2)
+		p.draw_line(x + 4, base - 30, x + 3, top_c - 3)
+		p.draw_line(x - 4, base - 30, x - 3, top_c - 3)
+		p.set_no_pen()
+		p.fill_rect(x - 4, top_c - 3, 9, 3, QP.rgb([226, 228, 234]))
+		p.fill_rect(x - 3, top_c - 4, 7, 1, QP.rgb([214, 150, 80]))
+	else:              # Nudelsieb schütteln
+		var k := sin(t * 7.0) * 2.0 if Py.mod(t, 4.0) < 2.4 else 0.0
+		var sx2 := x + 4.0
+		var sy2 := base - 31
+		var hx2 := x + 9.0
+		var hy2 := top_c - 4 + k
+		p.set_pen(QP.rgb(jacket), 2)
+		p.draw_line(sx2, sy2, hx2, hy2)
+		p.set_no_pen()
+		p.fill_rect(hx2, hy2, 5, 1, QP.rgb([120, 124, 134]))
+		p.set_brush(QP.rgb([150, 154, 166]))
+		p.draw_chord(hx2 + 4, hy2 - 1, 5, 4, 180 * 16, 180 * 16)
+		p.fill_rect(hx2 + 5, hy2 + 1, 3, 1, QP.rgb([230, 200, 120]))
 
 
-func _holos(_p_: QP, _e_: QP, _cam: float, _t: float, _kind: String) -> void:
-	pass  # TEIL B/C
-
-
-func _shout_fx(_p_: QP, _e_: QP, _world: Variant, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _new_wisp(_rng_: PyRandom, _initial: bool = false) -> void:
-	pass  # TEIL B/C
-
-
-func _wisps(_p_: QP, _dt: float, _cam: float) -> void:
-	pass  # TEIL B/C
-
-
-func _facade_life(_p_: QP, _e_: QP, _cam: float, _t: float, _dt: float) -> void:
-	pass  # TEIL B/C
-
-
-func _gate(_p_: QP, _e_: QP, _x: float, _g: Variant, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _street(_p_: QP, _e_: QP, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _rim_for(_a: Variant, _cam: float) -> Variant:
-	return null  # TEIL B/C
-
-
-func _mirror(_img: QImg) -> Variant:
-	return null  # TEIL B/C
-
-
-func _actors(_p_: QP, _e_: QP, _world: Variant, _cam: float, _t: float, _show_player: bool) -> void:
-	pass  # TEIL B/C
-
-
-func _draw_actor(_p_: QP, _e_: QP, _a: Variant, _cam: float, _t: float, _lit: bool = false) -> void:
-	pass  # TEIL B/C
-
-
-func _glints(_p_: QP, _e_: QP, _world: Variant, _cam: float, _boost: bool = false) -> void:
-	pass  # TEIL B/C
-
-
-func _flashlight(_p_: QP, _e_: QP, _world: Variant, _cam: float) -> void:
-	pass  # TEIL B/C
-
-
-func _draw_vehicle(_p_: QP, _e_: QP, _v: Variant, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _vehicle_lights(_p_: QP, _e_: QP, _world: Variant, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _draw_origami(_p_: QP, _e_: QP, _o: Variant, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _draw_parked(_p_: QP, _e_: QP, _o: Variant, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _draw_steam(_p_: QP, _e_: QP, _m: Variant, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _draw_obstacle(_p_: QP, _e_: QP, _o: Variant, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _patrol_geom(_world: Variant, _cam: float, _t: float) -> Variant:
-	return null  # TEIL B/C
-
-
-func _land_pose(_P: Variant, _cam: float, _t: float) -> Variant:
-	return null  # TEIL B/C
-
-
-func _draw_landing(_p_: QP, _e_: QP, _P: Variant, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _patrol(_p_: QP, _e_: QP, _world: Variant, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _beam_rain(_p_: QP) -> void:
-	if _beam_poly == null:   # bp = getattr(self, "_beam_poly", None)
+# ------------------------------------------------------------------ Hologramme
+func _holos(p: QP, e: QP, cam: float, t: float, kind: String) -> void:
+	var hs: Array = city.holos
+	if hs.is_empty():
 		return
-	pass  # TEIL B/C
+	var dim := 1.0 - 0.85 * dark          # Stromausfall: Hologramme fallen (fast) aus
+	if dim <= 0.05:
+		return
+	for hd: Dictionary in hs:
+		if hd["kind"] != kind:
+			continue
+		var lay: City.Layer = city.mid if kind == "giant" else city.facade
+		var x: float = lay.screen_x(float(hd["L"]), cam)
+		var hh: float = hd["h"]
+		if x < -hh or x > W + hh:
+			continue
+		var col: Array = hd["col"]
+		if kind == "street":
+			# Projektorsockel mit Linse + schwacher Lichtsäule
+			var b: float = hd["base"]
+			p.fill_rect(int(x) - 6, b - 4, 12, 5, QP.rgb([26, 28, 40]))
+			p.fill_rect(int(x) - 6, b - 4, 12, 1, QP.rgb(City.mul(city.th["rim"], 0.8)))
+			for q: QP in [p, e]:
+				q.fill_rect(int(x) - 3, b - 5, 6, 1, QP.rgb(col))
+			p.set_mode(PLUS)
+			var g := QGrad.linear(x, b - 5, x, b - hh)
+			g.set_color_at(0, QP.rgb(col, int(40 * dim)))
+			g.set_color_at(1, QP.c(0, 0, 0, 0))
+			p.set_no_pen()
+			p.set_brush(g)
+			p.draw_polygon(PackedVector2Array([Vector2(x - 3, b - 5), Vector2(x - hh * 0.3, b - hh),
+				Vector2(x + hh * 0.3, b - hh), Vector2(x + 3, b - 5)]))
+			p.set_mode(OVER)
+			Holo.render(p, e, x, b - 5, hh, col, t, hd["seed"], 0.4, 0.95 * dim, hd["mirror"])
+		else:
+			Holo.render(p, e, x, hd["base"], hh, col, t * 0.85, hd["seed"], 0.0, 0.6 * dim, hd["mirror"])
 
 
+# ------------------------------------------------------------------ Ruf
+## Rufwelle als Ring auf dem nassen Asphalt; beim Halten von V ein Lade-Ring.
+func _shout_fx(p: QP, _ea: QP, world: Variant, cam: float, t: float) -> void:
+	var pl: Variant = world.player
+	var rings: Array = []
+	var wave: Variant = world.wave
+	if wave != null and float(wave["r"]) > 0:
+		var k := float(wave["r"]) / maxf(1.0, float(wave["R"]))
+		rings.append([wave["x"], wave["depth"], wave["r"], maxf(0.0, 1.0 - k) * 0.9 + 0.1, [214, 220, 226]])
+	var hold: float = world.shout_hold
+	if hold >= Config.SHOUT_TAP and pl.alive:
+		var R: float = world.shout_radius()
+		var pulse := 0.55 + 0.25 * sin(t * 14)
+		rings.append([pl.x, pl.depth, R, pulse, [255, 138, 44]])
+	if rings.is_empty():
+		return
+	p.set_mode(PLUS)
+	p.set_no_brush()
+	for rg: Array in rings:
+		var x: float = rg[0]
+		var d: float = rg[1]
+		var r: float = rg[2]
+		var a: float = rg[3]
+		var col: Array = rg[4]
+		# Kreis in Welt-Einheiten (x, Tiefe*DEPTH_UNITS) -> Ellipse auf dem Boden
+		var cx := Persp.screen_x(x, d, cam)
+		var cy := Persp.ground_y(d)
+		var rx := r * Persp.ppu(d)
+		var ry := r / Config.DEPTH_UNITS * (Persp.ground_y(1) - Persp.ground_y(0))
+		for wd_a: Array in [[3, 0.35], [1, 1.0]]:
+			var wd: int = wd_a[0]
+			var aa: float = wd_a[1]
+			p.set_pen(QP.rgb(col, int(150 * a * aa)), wd)
+			p.draw_ellipse(cx - rx, cy - ry, 2 * rx, 2 * ry)
+	p.set_no_pen()
+	p.set_mode(OVER)
+
+
+func _new_wisp(rng_: PyRandom, initial: bool = false) -> Dictionary:
+	var x: float = rng_.uniform(0, W) if initial else rng_.choice([-170.0, W + 170.0])
+	var vx := rng_.uniform(6, 15) * (1 if x < W * 0.5 else -1)
+	return {"x": x, "y": rng_.uniform(Persp.FACADE_Y - 30, H - 16), "vx": vx,
+		"vy": rng_.uniform(-1.4, 1.4), "s": rng_.uniform(320, 900), "a": rng_.uniform(0.18, 0.44),
+		"t": 0.0, "life": rng_.uniform(12, 26)}
+
+
+## Große, weiche Nebelschwaden ziehen durchs Vordergrundbild und lassen die Sicht
+## stellenweise verschwimmen. Dichte folgt der Wetterlage (_fog_d).
+func _wisps(p: QP, dt: float, _cam: float) -> void:
+	if wisps.is_empty():
+		for _i in range(9):
+			wisps.append(_new_wisp(rng, true))
+	for wi: Dictionary in wisps:
+		wi["t"] = float(wi["t"]) + dt
+		wi["x"] = float(wi["x"]) + float(wi["vx"]) * dt
+		wi["y"] = float(wi["y"]) + float(wi["vy"]) * dt
+		if float(wi["t"]) > float(wi["life"]) or float(wi["x"]) < -260 or float(wi["x"]) > W + 260:
+			wi.clear()
+			wi.merge(_new_wisp(rng), true)
+	p.set_smooth(true)
+	var tex: QImg = city.cloud
+	var boost := 0.7 + 1.0 * _fog_d
+	for wi: Dictionary in wisps:
+		var fade := sin(minf(1.0, float(wi["t"]) / float(wi["life"])) * PI)
+		var a := float(wi["a"]) * fade * boost
+		if a <= 0.006:
+			continue
+		p.set_opacity(minf(0.5, a))
+		var sw: float = wi["s"]
+		var sh := sw * 0.66
+		p.draw_image(Rect2(float(wi["x"]) - sw / 2, float(wi["y"]) - sh / 2, sw, sh), tex)
+	p.set_opacity(1.0)
+	p.set_smooth(false)
+
+
+# ---- vorläufige Stubs (werden gruppenweise ersetzt)
+func _facade_life(_pa: QP, _ea: QP, _cam: float, _t: float, _dt: float) -> void:
+	pass
+func _gate(_pa: QP, _ea: QP, _x: float, _g: Variant, _t: float) -> void:
+	pass
+func _street(_pa: QP, _ea: QP, _cam: float, _t: float) -> void:
+	pass
+func _rim_for(_a: Variant, _cam: float) -> Variant:
+	return null
+func _mirror(_img: QImg) -> Variant:
+	return null
+func _actors(_pa: QP, _ea: QP, _world: Variant, _cam: float, _t: float, _show_player: bool) -> void:
+	pass
+func _draw_actor(_pa: QP, _ea: QP, _a: Variant, _cam: float, _t: float, _lit: bool = false) -> void:
+	pass
+func _glints(_pa: QP, _ea: QP, _world: Variant, _cam: float, _boost: bool = false) -> void:
+	pass
+func _flashlight(_pa: QP, _ea: QP, _world: Variant, _cam: float) -> void:
+	pass
+func _draw_vehicle(_pa: QP, _ea: QP, _v: Variant, _cam: float, _t: float) -> void:
+	pass
+func _vehicle_lights(_pa: QP, _ea: QP, _world: Variant, _cam: float, _t: float) -> void:
+	pass
+func _draw_origami(_pa: QP, _ea: QP, _o: Variant, _cam: float, _t: float) -> void:
+	pass
+func _draw_parked(_pa: QP, _ea: QP, _o: Variant, _cam: float, _t: float) -> void:
+	pass
+func _draw_steam(_pa: QP, _ea: QP, _m: Variant, _cam: float, _t: float) -> void:
+	pass
+func _draw_obstacle(_pa: QP, _ea: QP, _o: Variant, _cam: float, _t: float) -> void:
+	pass
+func _patrol_geom(_world: Variant, _cam: float, _t: float) -> Variant:
+	return null
+func _land_pose(_P: Variant, _cam: float, _t: float) -> Variant:
+	return null
+func _draw_landing(_pa: QP, _ea: QP, _P: Variant, _cam: float, _t: float) -> void:
+	pass
+func _patrol(_pa: QP, _ea: QP, _world: Variant, _cam: float, _t: float) -> void:
+	pass
+func _beam_rain(_pa: QP) -> void:
+	if _beam_poly == null:
+		return
 func _hand(_world: Variant) -> Variant:
-	return null  # TEIL B/C
-
-
+	return null
 func _chest(_a: Variant, _cam: float) -> Variant:
-	return null  # TEIL B/C
-
-
-func _combat(_p_: QP, _e_: QP, _world: Variant, _cam: float, _t: float) -> void:
-	pass  # TEIL B/C
-
-
-func _foreground(_p_: QP, _cam: float) -> void:
-	pass  # TEIL B/C
-
-
-func _power_on(_p_: QP, _k: float) -> void:
-	pass  # TEIL B/C
+	return null
+func _combat(_pa: QP, _ea: QP, _world: Variant, _cam: float, _t: float) -> void:
+	pass
+func _foreground(_pa: QP, _cam: float) -> void:
+	pass
+func _power_on(_pa: QP, _k: float) -> void:
+	pass
