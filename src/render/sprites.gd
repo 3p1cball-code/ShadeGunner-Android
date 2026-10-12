@@ -526,8 +526,50 @@ static func _draw_head(p: QP, emit: QP, look: Dictionary, P: Dictionary, hc: Vec
 	return eye
 
 
+## drawPolyline. Dünne Stifte: Qt zeichnet den Pfad am Stück (jedes Pixel einmal);
+## QP strichelt Segmente einzeln und deckt Stoßpixel doppelt -> Pixelmenge selbst bilden.
 static func _polyline(p: QP, pts: PackedVector2Array) -> void:
-	p.draw_polyline(pts)
+	var xf := p.transform()
+	if p.pen_w * sqrt(absf(xf.determinant())) > 1.0 or pts.size() < 2:
+		p.draw_polyline(pts)
+		return
+	var seen := {}
+	var cells: Array[Vector2i] = []
+	for i in range(1, pts.size()):
+		var a := Vector2i((xf * pts[i - 1]).floor())
+		var b := Vector2i((xf * pts[i]).floor())
+		for c in _bresenham(a, b):
+			if not seen.has(c):
+				seen[c] = true
+				cells.append(c)
+	var col := p.pen_col
+	p.save()
+	p.reset_transform()
+	for c in cells:
+		p.fill_rect(c.x, c.y, 1, 1, col)
+	p.restore()
+
+
+static func _bresenham(a: Vector2i, b: Vector2i) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	var dx := absi(b.x - a.x)
+	var dy := -absi(b.y - a.y)
+	var sx := 1 if a.x < b.x else -1
+	var sy := 1 if a.y < b.y else -1
+	var err := dx + dy
+	var c := a
+	while true:
+		out.append(c)
+		if c == b:
+			break
+		var e2 := 2 * err
+		if e2 >= dy:
+			err += dy
+			c.x += sx
+		if e2 <= dx:
+			err += dx
+			c.y += sy
+	return out
 
 
 static func _umbrella(p: QP, emit: QP, look: Dictionary, hc: Vector2) -> void:
