@@ -12,6 +12,16 @@ extends RefCounted
 ##        angelegt und damit im selben Frame danach gerendert.
 ## Zwei Paare im Wechsel: ist eines voll, wird das andere geleert (s. _swap).
 ## Tabellen kommen aus DSprites (tools/export_data.py).
+##
+## Benutzung:
+##   Sprites.baker = baker            # einmal; Baker hängt im Baum VOR dem Szenen-Viewport
+##   var r := Sprites.get_(look, "walk", f, h_px, facing, rim, rim_side, fog_rgb, fog)
+##   # r = [img: QImg, emit: QImg|null, ax: int, ay: int, meta]  (ax, ay = Fußpunkt im Bild)
+##   # meta = {eye, hand, head: Vector2 (relativ zum Fußpunkt, px), head_top: float}
+##   p.draw_image_at(x - r[2], y - r[3], r[0])
+## Ein Cache-Fehlschlag backt sofort; das Bild ist im selben Frame gültig.
+## Abweichungen von QP (gegen Qt gemessen): Formen per Pixelmitte (_SP), dünne
+## Stifte mit Cosmetic-Deckkraft (_pen) und Qt-Pixelwahl (_qt_line_cells).
 
 const PI_ := DSprites.PI
 const ANIMS := DSprites.ANIMS
