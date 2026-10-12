@@ -152,7 +152,8 @@ func draw_image(dst: Rect2, img: QImg, src: Rect2 = Rect2()) -> void:
 		return
 	var s := src if src.size != Vector2.ZERO else Rect2(Vector2.ZERO, img.region.size)
 	var axis := xf.x.y == 0.0 and xf.y.x == 0.0
-	if axis and (xf.x.x != 1.0 or xf.y.y != 1.0 or dst.size != s.size):
+	# ±1-Skala (Spiegelung) ohne Streckung: 1:1-Kopie, schneller Weg über die GPU
+	if axis and (absf(xf.x.x) != 1.0 or absf(xf.y.y) != 1.0 or dst.size != s.size):
 		_scaled_image(dst, img, s)
 		return
 	var keep := xf
