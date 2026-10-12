@@ -1130,7 +1130,6 @@ func _wisps(p: QP, dt: float, _cam: float) -> void:
 	p.set_smooth(false)
 
 
-# ---- vorläufige Stubs (werden gruppenweise ersetzt)
 # ------------------------------------------------------------------ Häuserfront
 func _facade_life(p: QP, e: QP, cam: float, t: float, dt: float) -> void:
 	var fac: City.Layer = city.facade
@@ -2127,13 +2126,163 @@ func _beam_rain(p: QP) -> void:
 	p.set_mode(PLUS)
 	fx.draw_rain(p, [int(200 * on), int(210 * on), int(240 * on)])
 	p.restore()
-func _hand(_world: Variant) -> Variant:
-	return null
-func _chest(_a: Variant, _cam: float) -> Variant:
-	return null
-func _combat(_pa: QP, _ea: QP, _world: Variant, _cam: float, _t: float) -> void:
-	pass
-func _foreground(_pa: QP, _cam: float) -> void:
-	pass
-func _power_on(_pa: QP, _k: float) -> void:
-	pass
+# ------------------------------------------------------------------ Kampf-Overlays
+func _hand(world: Variant) -> Array:
+	var pl: Variant = world.player
+	var sc: Variant = screen.get(pl.uid)
+	if sc == null:
+		var cx := Persp.screen_x(float(pl.x), float(pl.depth), float(world.camera_x))
+		var gy := Persp.ground_y(float(pl.depth))
+		return [cx, gy - Persp.figure_h(float(pl.depth)) * 0.62]
+	var arr: Array = sc
+	var cx2: float = arr[0]
+	var gy2: float = arr[1]
+	var meta: Dictionary = arr[3]
+	var hand: Vector2 = meta["hand"]
+	return [cx2 + hand.x + int(pl.facing) * 2, gy2 + hand.y]
+
+
+func _chest(a: Variant, cam: float) -> Array:
+	var sc: Variant = screen.get(a.uid)
+	if sc != null:
+		var arr: Array = sc
+		return [arr[0], arr[1] - float(arr[2]) * 0.62, arr[2]]
+	var cx := Persp.screen_x(float(a.x), float(a.depth), cam)
+	var hgt := Persp.figure_h(float(a.depth))
+	return [cx, Persp.ground_y(float(a.depth)) - hgt * 0.62, hgt]
+
+
+func _combat(p: QP, e: QP, world: Variant, cam: float, _t: float) -> void:
+	# Scan-Strahl
+	if float(world.scan_t) >= 0 and world.scan_target != null and screen.has(world.player.uid):
+		var tg: Variant = world.scan_target
+		var hand: Array = _hand(world)
+		var hx: float = hand[0]
+		var hy: float = hand[1]
+		var chest: Array = _chest(tg, cam)
+		var tx: float = chest[0]
+		var ty: float = chest[1]
+		var thg: float = chest[2]
+		var k := float(world.scan_t) / maxf(0.01, Config.SCAN_TIME * float(world.run.mods["scan_time"]))
+		var sweep := ty - thg * 0.38 + thg * 0.9 * (0.5 + 0.5 * sin(k * PI * 3))
+		p.set_mode(PLUS)
+		var g := QGrad.linear(hx, hy, tx, ty)
+		g.set_color_at(0, QP.c(64, 210, 220, 140))
+		g.set_color_at(1, QP.c(64, 210, 220, 40))
+		p.set_no_pen()
+		p.set_brush(g)
+		p.draw_polygon(PackedVector2Array([Vector2(hx, hy - 0.5), Vector2(tx, sweep - thg * 0.12),
+			Vector2(tx, sweep + thg * 0.12), Vector2(hx, hy + 0.5)]))
+		p.set_mode(OVER)
+		for q: QP in [p, e]:
+			q.fill_rect(tx - thg * 0.22, sweep, thg * 0.44, 1, QP.rgb(DScene.CYAN))
+	# Laservisier
+	if world.aiming:
+		var hand2: Array = _hand(world)
+		var hx2: float = hand2[0]
+		var hy2: float = hand2[1]
+		var b: Variant = world.blocker
+		var tgt: Variant = world.target
+		var ex := 0.0
+		var ey := 0.0
+		if b != null:
+			var ch: Array = _chest(b, cam)
+			ex = ch[0]
+			ey = ch[1]
+		elif tgt != null:
+			var ch2: Array = _chest(tgt, cam)
+			ex = ch2[0]
+			ey = ch2[1]
+		else:
+			ex = hx2 + int(world.player.facing) * Config.SHOOT_RANGE * Persp.ppu(float(world.player.depth))
+			ey = hy2
+		var blocked: bool = b != null and b != tgt
+		var col: Array = [255, 60, 80] if not blocked else DScene.AMBER
+		var steady := minf(1.0, float(world.aim_t) / maxf(0.05, float(world.run.mods["aim_min"]) + 0.01))
+		for qa: Array in [[p, 200], [e, 160]]:
+			var q: QP = qa[0]
+			var a_: int = qa[1]
+			q.set_pen(QP.rgb(col, int(a_ * (0.4 + 0.6 * steady))), 1)
+			q.draw_line(hx2, hy2, ex, ey)
+			q.fill_rect(int(ex) - 1, int(ey) - 1, 3, 3, QP.rgb(col))
+	# Leuchtspuren
+	for trk: Dictionary in fx.tracers:
+		var k2 := float(trk["t"]) / 0.16
+		var hand3: Array = _hand(world)
+		var hx3: float = hand3[0]
+		var hy3: float = hand3[1]
+		var ex := Persp.screen_x(float(trk["ex"]), float(trk["ed"]), cam)
+		var ey := Persp.ground_y(float(trk["ed"])) - Persp.figure_h(float(trk["ed"])) * 0.62
+		var sx := hx3
+		var sy := hy3
+		var a_ := int(255 * (1 - k2))
+		for q: QP in [p, e]:
+			q.set_pen(QP.c(255, 250, 230, a_), 2)
+			q.draw_line(sx + (ex - sx) * k2 * 0.6, sy + (ey - sy) * k2 * 0.6, ex, ey)
+			q.set_pen(QP.c(64, 210, 220, a_), 1)
+			q.draw_line(sx, sy - 1, ex, ey - 1)
+	for f: Dictionary in fx.flashes:
+		var x := Persp.screen_x(float(f["wx"]), float(f["d"]), cam)
+		var y := Persp.ground_y(float(f["d"])) + float(f["oy"])
+		var r := 3 + 10 * (1 - float(f["t"]) / 0.12)
+		var g := QGrad.radial(x, y, r)
+		g.set_color_at(0, QP.c(255, 240, 210, 255))
+		g.set_color_at(1, QP.c(255, 140, 60, 0))
+		for q: QP in [p, e]:
+			q.set_mode(PLUS)
+			q.fill_rect(x - r, y - r, 2 * r, 2 * r, g)
+			q.set_mode(OVER)
+	for s: Dictionary in fx.sparks:
+		var sc := Persp.scale(float(s["d"]))
+		var x := Persp.screen_x(float(s["wx"]), float(s["d"]), cam) + float(s["ox"]) * sc
+		var y := Persp.ground_y(float(s["d"])) + float(s["oy"])
+		if y > Persp.ground_y(float(s["d"])):
+			continue
+		var c: Array = s["c"]
+		p.fill_rect(int(x), int(y), 1, 1, QP.rgb(c))
+		if c[0] > 200:
+			e.fill_rect(int(x), int(y), 1, 1, QP.rgb(c))
+
+
+# ------------------------------------------------------------------ Vordergrund
+## Säulen/Masten sehr nah an der Kamera (Tiefe 1.35) und Kabel oben.
+func _foreground(p: QP, cam: float) -> void:
+	var d := 1.35
+	var k := Persp.ppu(d)
+	var spacing := 620.0
+	var first := int(floor((cam - W / k) / spacing)) - 1
+	for i in range(first, first + 4):
+		var wx := i * spacing + 230 * Scene._hash(i, 3)
+		var x := Persp.screen_x(wx, d, cam)
+		if x < -40 or x > W + 40:
+			continue
+		var kind := Scene._hash(i, 9)
+		if kind < 0.5:
+			var ww := 14
+			p.fill_rect(int(x), 0, ww, H, QP.rgb([5, 6, 10]))
+			p.fill_rect(int(x) + ww - 2, 0, 1, H, QP.rgb(Scene.mul(city.th["rim"], 0.35)))
+			p.fill_rect(int(x), int(H * 0.55), ww, 3, QP.rgb(Scene.mul(city.th["neon"][0], 0.5)))
+		else:
+			# Hängendes Kabel quer durchs Bild
+			p.set_pen(QP.rgb([8, 9, 14]), 2)
+			var y0 := 10 + 18 * Scene._hash(i, 5)
+			var pts := PackedVector2Array()
+			for j in range(21):
+				pts.append(Vector2(x - 200 + j * 20, y0 + 26 * sin(PI * float(j) / 20)))
+			p.draw_polyline(pts)
+
+
+# ------------------------------------------------------------------ CRT-Einschalten
+## k 0..1: Bild öffnet sich vom Leuchtstrich zur vollen Höhe.
+func _power_on(p: QP, k: float) -> void:
+	if k <= 0:
+		p.fill_rect(0, 0, W, H, QP.rgb(DScene.VOID))
+		return
+	var open_h := H * pow(maxf(0.0, (k - 0.25) / 0.75), 1.5)
+	var band := maxf(1.0, open_h)
+	var top := (H - band) / 2
+	p.fill_rect(0, 0, W, top, QP.rgb(DScene.VOID))
+	p.fill_rect(0, top + band, W, H - top - band, QP.rgb(DScene.VOID))
+	if k < 0.4:
+		var wv := W * minf(1.0, k / 0.25)
+		p.fill_rect((W - wv) / 2, H / 2.0 - 1, wv, 2, QP.rgb(DScene.WHITE))
