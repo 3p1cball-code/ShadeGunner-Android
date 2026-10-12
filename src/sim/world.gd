@@ -595,4 +595,462 @@ func cycle_target(direction: int = 1) -> void:
 	manual_target = true
 	events.append(["target"])
 
-# --- TEIL2 ---
+# ------------------------------------------------------------------ Schusslinie
+## [x, depth] der Mündung.
+func muzzle() -> Array:
+	var p := player
+	return [p.x + p.facing * 9.0, p.depth]
+
+
+## Erster Aktor auf der Linie Spieler -> Ziel (oder geradeaus). null = ins Leere.
+func line_of_fire(target_: Actor) -> Actor:
+	var mz := muzzle()
+	var sx: float = mz[0]
+	var sd: float = mz[1]
+	var tx: float
+	var td: float
+	if target_ != null:
+		tx = target_.x
+		td = target_.depth
+	else:
+		tx = sx + player.facing * Config.SHOOT_RANGE
+		td = sd
+	var vx := tx - sx
+	var vy := (td - sd) * DU
+	var L2 := vx * vx + vy * vy
+	if L2 < 1e-6:
+		return target_
+	var best: Actor = target_
+	var best_s := 1.0
+	if target_ != null and sqrt(L2) > Config.SHOOT_RANGE:
+		best = null
+		best_s = Config.SHOOT_RANGE / sqrt(L2)
+	for a: Actor in living():
+		if a == target_ or a.state == "duck":      # Geduckte: die Kugel geht drüber
+			continue
+		var s := ((a.x - sx) * vx + (a.depth - sd) * DU * vy) / L2
+		if 0.02 < s and s < best_s:
+			var dx := a.x - (sx + vx * s)
+			var dy := (a.depth - sd) * DU - vy * s
+			if absf(dx) < 5.5 and absf(dy) < 7.0:
+				best = a
+				best_s = s
+	return best
+
+
+# ------------------------------------------------------------------ Aktionen
+func shout_ready() -> bool:
+	return shout_cd <= 0.0
+
+
+## V tippen = Ansprache an das Ziel; V halten = Ruf an die Menge (Radius wächst
+## mit der Haltezeit), ausgelöst beim Loslassen.
+func _shout_input(dt: float, held: bool) -> void:
+	if held and shout_hold < 0.0:
+		shout_hold = 0.0
+	if held:
+		shout_hold += dt
+		return
+	if shout_hold < 0.0:
+		return
+	var h := shout_hold
+	shout_hold = -1.0
+	if h < Config.SHOUT_TAP:
+		address()
+	else:
+		shout_crowd(shout_radius(h))
+
+
+func shout_radius(hold: Variant = null) -> float:
+	var h: float = shout_hold if hold == null else float(hold)
+	var k := minf(1.0, maxf(0.0, (h - Config.SHOUT_TAP) / Config.SHOUT_CHARGE))
+	var r0: float = Config.SHOUT_RADIUS[0]
+	var r1: float = Config.SHOUT_RADIUS[1]
+	return (r0 + (r1 - r0) * k) * float(run.mods["shout_r"])
+
+
+## „Sie da! Stehen bleiben!“ - spricht nur das gewählte Ziel an.
+func address() -> String:
+	if state != "playing":
+		return "no"
+	var t := target
+	var p := player
+	if talk_cd > 0.0:
+		events.append(["no_charge"])
+		return "cooldown"
+	if t == null or not t.alive or dist(p, t) > Config.TALK_RANGE:
+		events.append(["no_target"])
+		_say("Niemand in Rufweite angesprochen.")
+		return "no_target"
+	talk_cd = Config.TALK_CD
+	floater(_tr(rng.choice(DSim.TALK_LINES)), p, [255, 255, 255], 1.4)
+	events.append(["talk", t.uid])
+	reactions.append([t.react_t + 0.1, t, "talk"])
+	unrest = minf(1.0, unrest + 0.03)
+	return "ok"
+
+
+## „LAPD! Alle runter!“ - Ruf als Welle: jeder reagiert, wenn sie ihn erreicht.
+func shout_crowd(R: Variant = null) -> String:
+	if state != "playing":
+		return "no"
+	if shout_cd > 0.0:
+		events.append(["no_charge"])
+		return "cooldown"
+	var p := player
+	var rr: float = float(R) if R != null else shout_radius(Config.SHOUT_TAP + Config.SHOUT_CHARGE)
+	shout_cd = Config.SHOUT_CD * float(run.mods["shout_cd"])
+	wave = {"x": p.x, "depth": p.depth, "r": 0.0, "R": rr, "t": 0.0}
+	events.append(["shout", p.x, rr])
+	floater(_tr(rng.choice(DSim.SHOUT_LINES)), p, [255, 255, 255], 1.5)
+	for a: Actor in living():
+		if a.boss or a.state in ["flee", "attack", "punch", "leap"]:
+			continue
+		var d := dist(p, a)
+		if d <= rr:
+			reactions.append([d / Config.SHOUT_SPEED + a.react_t, a, "crowd"])
+	shout_n = 0
+	shout_count = {"duck": 0, "freeze": 0, "run": 0}
+	unrest = minf(1.0, unrest + UNREST_PER_SHOUT)
+	return "ok"
+
+
+func _update_reactions(dt: float) -> void:
+	if wave != null:
+		var w: Dictionary = wave
+		w["t"] += dt
+		w["r"] = w["t"] * Config.SHOUT_SPEED
+		if w["r"] > w["R"] * 1.15:
+			wave = null
+	unrest = maxf(0.0, unrest - dt * Config.UNREST_DECAY)
+	if reactions.is_empty():
+		return
+	var due := []
+	var keep := []
+	for r: Array in reactions:
+		r[0] -= dt
+		if r[0] <= 0.0:
+			due.append(r)
+		else:
+			keep.append(r)
+	reactions = keep
+	for r: Array in due:
+		var a: Actor = r[1]
+		if a.alive and not a.escaped:
+			_react(a, r[2])
+	if reactions.is_empty() and _truthy(shout_count):
+		var c: Dictionary = shout_count
+		_say(_tr("Ruf: {} in Deckung, {} reglos, {} rennen.", [c["duck"], c["freeze"], c["run"]]))
+		shout_count = null
+
+
+func _react(a: Actor, kind: String) -> void:
+	var p := player
+	var u := unrest
+	var c: Dictionary = shout_count if (kind == "crowd" and _truthy(shout_count)) else {"duck": 0, "freeze": 0, "run": 0}
+	if a.state in ["flee", "attack", "punch", "leap"] or a.z > 0.0:
+		return
+	# Ertappt? Gescannte/anvisierte Replikanten und ein Teil der übrigen hauen ab -
+	# je unruhiger die Straße, desto eher.
+	if a.is_replicant and not a.alert:
+		var p_alert: float = float(zone["flee"]) * (Config.SHOUT_ALERT if kind == "crowd" else Config.TALK_ALERT) * (1 + 1.5 * u)
+		if a.scanned or a.aimed_t > 0.5 or rng.random() < p_alert:
+			_alert(a)
+			c["run"] += 1
+			return
+	var new := not a.revealed.has("stimulus")
+	a.revealed["stimulus"] = true
+	var dur := rng.uniform(Config.SHOUT_DUCK[0], Config.SHOUT_DUCK[1]) * (1.0 - 0.35 * u)
+	a.facing = 1 if p.x >= a.x else -1
+	if _truthy(a.tells.get("stimulus")):
+		a.state = "freeze"                         # starrt den Rufer an
+		a.timer = dur
+		a.vx = 0.0
+		if new and (kind == "talk" or a == target or dist(p, a) < Config.OBSERVE_RANGE):
+			floater(_tr("REGLOS"), a, [255, 138, 44], 1.8)
+			if a == target:
+				events.append(["tell", a.uid, "stimulus"])
+		c["freeze"] += 1
+	elif kind == "talk":
+		a.state = "hands"
+		a.timer = rng.uniform(2.2, 3.2)
+		a.vx = 0.0
+		if not a.is_replicant or rng.random() < 0.8:
+			floater(_tr(rng.choice(DSim.TALK_ANSWERS)), a, [162, 168, 180], 1.6)
+		if new and a == target:
+			floater(_tr("REIZ: NORMAL"), a, [162, 168, 180], 1.4)
+	elif not a.is_replicant and rng.random() < SHOUT_SCATTER + 0.5 * u:
+		_panic_one(a, p.x)                         # rennt lieber weg
+		c["run"] += 1
+	else:
+		a.state = "duck"
+		a.timer = dur
+		a.vx = 0.0
+		c["duck"] += 1
+
+
+## Startet einen Scan auf das aktuelle Ziel. Rückgabe [status, aktor].
+func scan() -> Array:
+	if state != "playing":
+		return ["no_target", null]
+	if player.z > 0.0:
+		return ["airborne", null]
+	if scan_charges < 1.0:
+		events.append(["no_charge"])
+		_say(_tr("Keine Scan-Ladung."))
+		return ["no_charge", null]
+	var t := target
+	if t != null and dist(player, t) > Config.SCAN_RANGE:
+		# Gewähltes Ziel bleibt gewählt - kein stilles Umschwenken auf jemand anderen
+		events.append(["no_target"])
+		_say(_tr("Ziel zu weit für den Scan - näher ran."))
+		floater(_tr("ZU WEIT"), t, [162, 168, 180], 1.0)
+		return ["too_far", t]
+	if t == null:
+		var bd := 0.0
+		for a: Actor in living():
+			if not a.scanned:
+				var d := dist(player, a)
+				if d <= Config.SCAN_RANGE and (t == null or d < bd):
+					t = a
+					bd = d
+		if t == null:
+			events.append(["no_target"])
+			return ["no_target", null]
+		target = t
+	scan_charges -= 1.0
+	scan_t = 0.0
+	scan_target = t
+	stats["scans"] += 1
+	events.append(["scan_start", t.uid])
+	return ["ok", t]
+
+
+func _finish_scan(t: Actor) -> void:
+	scan_t = -1.0
+	scan_target = null
+	var deep := bool(run.mods["deep"])
+	var close := dist(player, t) <= 70.0
+	for n: String in Detection.STRONG_TELLS:
+		if n == "serial" and not (close or deep):
+			continue
+		t.revealed[n] = true
+	if deep:
+		for n: String in Detection.WEAK_TELLS:
+			t.revealed[n] = true
+	t.scanned = true
+	t.flash_t = 0.35
+	var conf := confidence_of(t)
+	events.append(["scan_done", t.uid, conf])
+	var col: Array = [64, 210, 220] if conf >= 0.66 else ([255, 138, 44] if conf >= 0.33 else [162, 168, 180])
+	floater("P %d%%" % Py.round(conf * 100), t, col, 1.4)
+	# Reaktion
+	if t.is_replicant:
+		if rng.random() < float(zone["flee"]):
+			_alert(t)
+	elif rng.random() < 0.12:
+		_panic_one(t, player.x)
+
+
+## Rückgabe [ergebnis, getroffener Aktor oder null].
+func fire() -> Array:
+	if shot_cd > 0 or state != "playing":
+		return ["cooldown", null]
+	shot_cd = Config.SHOT_COOLDOWN
+	stats["shots"] += 1
+	var t := target
+	var hit := line_of_fire(t)
+	var mz := muzzle()
+	var sx: float = mz[0]
+	var sd: float = mz[1]
+	var ex: float
+	var ed: float
+	if hit != null:
+		ex = hit.x
+		ed = hit.depth
+	elif t != null:
+		ex = t.x
+		ed = t.depth
+		var k := Config.SHOOT_RANGE / maxf(1.0, dist(player, t))
+		ex = sx + (ex - sx) * k
+		ed = sd + (ed - sd) * k
+	else:
+		ex = sx + player.facing * Config.SHOOT_RANGE
+		ed = sd
+	events.append(["shot", sx, sd, ex, ed, hit.uid if hit != null else null])
+	player.state = "shoot"
+	_panic_area(sx, Config.PANIC_RADIUS, hit)
+	if hit == null:
+		return ["miss", null]
+	return [_hit(hit), hit]
+
+
+func _hit(a: Actor) -> String:
+	if a.boss:
+		if a.boss_invuln:               # während seiner Rede abgewehrt
+			events.append(["boss_blocked"])
+			floater(_tr("ABGEWEHRT"), a, [162, 168, 180], 0.9)
+			return "blocked"
+		a.hp -= 1
+		a.flash_t = 0.3
+		a.knock = 44.0 * (1 if a.x >= player.x else -1)
+		events.append(["boss_hit", a.hp])
+		if a.hp <= 0:
+			_kill(a)
+			events.append(["boss_dead"])
+			_say(_tr("ROY deaktiviert."))
+			return "boss_dead"
+		boss_hits += 1
+		if boss_hits >= Config.ROY_PER_LINE and boss_line < Config.ROY_LINES.size() - 1:
+			boss_hits = 0
+			boss_line += 1
+			boss_speak_t = Config.ROY_SPEAK_S
+			a.boss_invuln = true
+			events.append(["boss_line", boss_line])
+		return "boss"
+	if a.is_replicant and a.hp > 1:
+		a.hp -= 1
+		a.flash_t = 0.3
+		a.knock = 60.0 * (1 if a.x >= player.x else -1)
+		floater(_tr("ZÄH! NOCH EINMAL"), a, [255, 138, 44], 1.4)
+		events.append(["tough", a.uid])
+		a.alert = false
+		a.aggressive = true
+		_alert(a)
+		return "tough"
+	return _kill(a)
+
+
+## Sofortschuss auf das aktuelle Ziel (Kompatibilität/Tests).
+func neutralize() -> Array:
+	if target == null or not _target_ok(target):
+		_update_target({})
+	var a := target
+	if a == null or dist(player, a) > Config.SHOOT_RANGE:
+		return ["no_target", null]
+	shot_cd = 0.0
+	return fire()
+
+
+func _kill(a: Actor) -> String:
+	a.alive = false
+	a.state = "dead"
+	a.dead_t = 0.0
+	a.flash_t = 0.25
+	a.knock = 26.0 * (1 if a.x >= player.x else -1)
+	a.facing = -1 if a.knock > 0 else 1
+	if target == a:
+		target = null
+	if a.is_replicant:
+		var pts := Config.POINTS_REPLICANT * combo
+		if not a.scanned:
+			pts += Config.POINTS_INSTINCT
+		run.score += pts
+		stats["score"] += pts
+		stats["reps"] += 1
+		run.totals["reps"] += 1
+		floater(_tr("REPLIKANT +{}", [pts]), a, [64, 210, 220], 2.0)
+		if combo > 1:
+			floater(_tr("KETTE X{}", [combo]), a, [255, 138, 44], 1.6)
+		if a.bounty:
+			run.score += Config.POINTS_BOUNTY
+			stats["score"] += Config.POINTS_BOUNTY
+			stats["bounty"] = true
+			floater(_tr("KOPFGELD {} +{}", [a.name, Config.POINTS_BOUNTY]), a, [255, 138, 44], 2.6)
+			events.append(["bounty", a.uid])
+		combo = mini(Config.COMBO_MAX, combo + 1)
+		_say(_tr("Kopfgeld kassiert: {}.", [a.name]) if a.bounty else _tr("Replikant deaktiviert."))
+		events.append(["kill", a.uid, true])
+		if stats["reps"] == quota:
+			events.append(["quota"])
+			_say(_tr("Auftrag erfüllt - Ausgang offen."))
+		return "replicant"
+	var w := Config.SUSPICION_WATCHED if watched else 1.0
+	suspicion = minf(1.0, suspicion + Config.SUSPICION_PER_CIVILIAN * float(run.mods["susp"]) * w)
+	if watched:
+		floater(_tr("VOR DEN AUGEN DER POLIZEI"), a, [224, 72, 90], 2.2)
+	run.score += Config.POINTS_CIVILIAN
+	stats["score"] += Config.POINTS_CIVILIAN
+	stats["civs"] += 1
+	run.totals["civs"] += 1
+	combo = 1
+	floater(_tr("MENSCH  {}", [Config.POINTS_CIVILIAN]), a, [224, 72, 90], 2.2)
+	_say(_tr("MENSCH getötet! Verdacht steigt."))
+	events.append(["kill", a.uid, false])
+	if suspicion >= 1.0:
+		_fail("suspicion")
+	return "civilian"
+
+
+# ------------------------------------------------------------------ Schaden
+## src: Actor oder Fahrzeug-Dictionary.
+func hurt_player(src: Variant, knock: float = 90.0, text: String = "-1 INTEGRITÄT") -> bool:
+	var p := player
+	if p.invuln > 0 or state != "playing":
+		return false
+	var src_x: float = src["x"] if src is Dictionary else src.x
+	p.hp -= 1
+	run.hp = p.hp
+	p.invuln = 1.3
+	p.flash_t = 0.3
+	p.state = "hurt"
+	p.timer = 0.45
+	p.knock = knock * (1 if p.x >= src_x else -1)
+	scan_t = -1.0
+	scan_target = null
+	aiming = false
+	events.append(["hurt", p.hp])
+	floater(_tr(text), p, [224, 72, 90], 1.4)
+	if p.hp <= 0:
+		_fail("hp")
+	return true
+
+
+# ------------------------------------------------------------------ Höhe / Hindernisse
+func _physics_z(a: Actor, dt: float) -> void:
+	if a.z > 0.0 or a.vz > 0.0:
+		a.vz -= Config.GRAVITY * dt
+		a.z += a.vz * dt
+		if a.z <= 0.0:
+			a.z = 0.0
+			a.vz = 0.0
+			events.append(["land", a.uid])
+
+
+## Hindernisse in der Nähe von x (Raster nach x; neu gebaut, wenn sich die Liste ändert).
+func _obs_near(x: float) -> Array:
+	var obs := obstacles
+	if not is_same(_grid_obs, obs) or _grid_len != obs.size():
+		var g := {}
+		for o: Dictionary in obs:
+			var pad: float = o["w"] + 40.0                      # Reichweite r/look der Abfragen
+			var c0 := int(Py.floordiv(o["x"] - pad, _CELL))
+			var c1 := int(Py.floordiv(o["x"] + pad, _CELL))
+			for c in range(c0, c1 + 1):
+				if not g.has(c):
+					g[c] = []
+				(g[c] as Array).append(o)
+		_grid = g
+		_grid_obs = obs
+		_grid_len = obs.size()
+	return _grid.get(int(Py.floordiv(x, _CELL)), [])
+
+
+func blocked(x: float, d: float, z: float, r: float = 4.0) -> bool:
+	for o: Dictionary in _obs_near(x):
+		if absf(x - o["x"]) < o["w"] + r and absf(d - o["d"]) < o["dd"] + 0.02 and z < o["h"]:
+			return true
+	return false
+
+
+func _obstacle_ahead(a: Actor, look: float = 26.0) -> Variant:
+	if a.vx == 0.0:
+		return null
+	var s := 1 if a.vx > 0 else -1
+	for o: Dictionary in _obs_near(a.x):
+		var ahead: float = (o["x"] - a.x) * s
+		if -o["w"] < ahead and ahead < o["w"] + look and absf(a.depth - o["d"]) < o["dd"] + 0.035:
+			return o
+	return null
+
+# --- TEIL3 ---
