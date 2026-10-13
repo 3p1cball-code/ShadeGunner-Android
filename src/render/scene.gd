@@ -1,5 +1,10 @@
 class_name Scene
 extends RefCounted
+
+static var dbg_null := 0
+static var dbg_ok := 0
+static var dbg_null_v := 0
+static var dbg_ok_v := 0
 ## Szenen-Komposition (QP): Stadt + Figuren + Licht + Effekte -> Szenen-Textur.
 ## 1:1 nach shadegunner/render/scene.py.
 ##
@@ -1559,6 +1564,10 @@ func _draw_actor(p: QP, e: QP, a: Variant, cam: float, t: float, lit: bool = fal
 	var r: Array = Sprites.get_(a.look, a.anim, int(a.get("frame")), hgt, int(a.facing),
 		rim, side * int(a.facing), fog_rgb, fog, outline)
 	var im: QImg = r[0]
+	if im == null:
+		dbg_null += 1
+	else:
+		dbg_ok += 1
 	var em: QImg = r[1]
 	var ax: int = r[2]
 	var ay: int = r[3]
@@ -1693,6 +1702,10 @@ func _draw_vehicle(p: QP, e: QP, v: Dictionary, cam: float, t: float) -> void:
 	var gy := Persp.ground_y(d)
 	var r: Array = Vehicles.vehicle_image(v["kind"], v["seed"], k, city.th["rim"], v["dir"])
 	var im: QImg = r[0]
+	if im == null:
+		dbg_null_v += 1
+	else:
+		dbg_ok_v += 1
 	@warning_ignore("unused_variable")
 	var em: QImg = r[1]
 	var ax: int = r[2]

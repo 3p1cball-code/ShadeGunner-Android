@@ -52,6 +52,10 @@ var _frame := 0
 var _tickn := 0
 var _autoplay := false
 var _set_over := ""
+var _flick := false
+var _flick_imgs: Array = []
+var _flick_boxes: Array = []
+var _flick_bakes: Array = []
 var _devtest := false
 var _show_fps := false
 var _nocr := false
@@ -71,8 +75,19 @@ func _ready() -> void:
 				settings[pr[0]] = (pr[1] == "true") if pr[1] in ["true", "false"] else pr[1]
 	I18n.set_lang(str(settings.get("lang", "de")))
 
+	# Alle Back-Ziele (Sprite-/Fahrzeug-Atlanten, Stadt-Ebenen, Reflexionen, Holos,
+	# Schrift) haengen in einem eigenen Viewport, der als ERSTER angelegt wird. Godot
+	# rendert verschachtelte Viewports vor ihrem Eltern-Viewport - so ist ein im selben
+	# Frame gebackenes Bild fertig, bevor die Szene es zeichnet. Ohne das blieb ein neu
+	# gebackenes Sprite genau einen Frame lang leer (Flackern von Figuren/Autos).
+	var bake_host := SubViewport.new()
+	bake_host.name = "BakeHost"
+	bake_host.size = Vector2i(2, 2)
+	bake_host.disable_3d = true
+	bake_host.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	add_child(bake_host)
 	baker = Baker.new()
-	add_child(baker)
+	bake_host.add_child(baker)
 	City.baker = baker
 	Sprites.baker = baker
 	Vehicles.baker = baker
@@ -179,6 +194,8 @@ func _parse_args() -> void:
 				DisplayServer.window_set_size(Vector2i(int(wh[0]), int(wh[1])))
 		elif a == "--auto":
 			_autoplay = true
+		elif a == "--flickertest":
+			_flick = true
 		elif a.begins_with("--set="):
 			_set_over = a.substr(6)
 		elif a == "--nocr":
@@ -314,8 +331,10 @@ func _process(delta: float) -> void:
 	_edges.clear()
 	_mouse_moved = false
 
+	if _flick:
+		_flicker_probe()
 	if _show_fps and _tickn % 30 == 0:
-		print("fps=", Engine.get_frames_per_second(), "  szene=", "%.1f" % _prof_scene, "ms  hud=", "%.1f" % _prof_hud, "ms")
+		print("fps=", Engine.get_frames_per_second(), "  szene=", "%.1f" % _prof_scene, "ms  figuren ok/null=", Scene.dbg_ok, "/", Scene.dbg_null, "  autos ok/null=", Scene.dbg_ok_v, "/", Scene.dbg_null_v)
 	if _shot_path != "":
 		RenderingServer.force_draw()
 		RenderingServer.force_draw()
@@ -326,6 +345,66 @@ func _process(delta: float) -> void:
 
 
 var _edges := {}
+
+
+## Flacker-Detektor: Folgebilder der Szene aufnehmen und Figuren-/Fahrzeugkaesten
+## suchen, die genau einen Frame lang anders sind als davor UND danach.
+func _flicker_probe() -> void:
+	if _tickn < 40:
+		return
+	if _tickn <= 220:
+		var im := base_scene_tex.get_image()
+		im.convert(Image.FORMAT_RGB8)
+		_flick_imgs.append(im)
+		var boxes := []
+		for uid in scene.screen:
+			var sc: Array = scene.screen[uid]
+			var cx: float = sc[0]
+			var gy: float = sc[1]
+			var hg: float = sc[2]
+			if cx > 10 and cx < 630 and hg > 20:
+				boxes.append(Rect2i(int(cx - hg * 0.25), int(gy - hg), int(hg * 0.5), int(hg)).intersection(Rect2i(0, 0, 640, 360)))
+		_flick_boxes.append(boxes)
+		_flick_bakes.append(Sprites.bake_n)
+		Sprites.bake_n = 0
+		return
+	var ev := 0
+	var tot := 0
+	for t in range(1, _flick_imgs.size() - 1):
+		var a: Image = _flick_imgs[t - 1]
+		var b: Image = _flick_imgs[t]
+		var c: Image = _flick_imgs[t + 1]
+		for r: Rect2i in _flick_boxes[t]:
+			if r.size.x < 4 or r.size.y < 8:
+				continue
+			tot += 1
+			var dab := 0.0
+			var dbc := 0.0
+			var dac := 0.0
+			var n := 0
+			for y in range(r.position.y, r.end.y, 2):
+				for x in range(r.position.x, r.end.x, 2):
+					var pa := a.get_pixel(x, y)
+					var pb := b.get_pixel(x, y)
+					var pc := c.get_pixel(x, y)
+					dab += absf(pa.r - pb.r) + absf(pa.g - pb.g) + absf(pa.b - pb.b)
+					dbc += absf(pb.r - pc.r) + absf(pb.g - pc.g) + absf(pb.b - pc.b)
+					dac += absf(pa.r - pc.r) + absf(pa.g - pc.g) + absf(pa.b - pc.b)
+					n += 1
+			if n > 0 and minf(dab, dbc) / n > 0.08 and dac / n < 0.5 * minf(dab, dbc) / n:
+				ev += 1
+				if ev == 1:
+					for q in 3:
+						var src: Image = [a, b, c][q]
+						var cr := src.get_region(r.grow(6).intersection(Rect2i(0, 0, 640, 360)))
+						cr.resize(cr.get_width() * 6, cr.get_height() * 6, Image.INTERPOLATE_NEAREST)
+						cr.save_png("res://shots/flick_%d.png" % q)
+				if ev <= 8:
+					print("    Bakes in t-1/t/t+1: %s/%s/%s" % [_flick_bakes[t - 1], _flick_bakes[t], _flick_bakes[t + 1]])
+				if ev <= 5:
+					print("  Flacker-Ereignis Frame %d Kasten %s: d(t-1,t)=%.3f d(t,t+1)=%.3f d(t-1,t+1)=%.3f" % [t, str(r), dab / n, dbc / n, dac / n])
+	print("FLICKERTEST: %d Ereignisse in %d Kasten-Frames" % [ev, tot])
+	get_tree().quit()
 
 
 ## Selbsttest: alle Menuepfade und Aktionen einmal durchspielen (nur mit --devtest).
