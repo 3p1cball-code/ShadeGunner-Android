@@ -335,6 +335,9 @@ func _process(delta: float) -> void:
 	if not scene.sfx.is_empty():
 		audio.handle_events(scene.sfx.duplicate(), world)
 		scene.sfx.clear()
+	if touch != null:
+		touch.set_mode(mode)
+		touch.set_help(help)
 	audio.update(dt, world, mode)
 
 	var cam: Variant = title_cam if mode == "title" else null
@@ -492,6 +495,13 @@ func _play_tick(dt: float) -> void:
 		_set_mode("failing")
 
 
+## Szenenkoordinaten (View.W x 360) -> HUD-Koordinaten (HUD_SCALE-fach).
+func _hud_pos(sp: Variant) -> Vector2:
+	if sp == null:
+		return Vector2(-1, -1)
+	return Vector2(sp.x * Config.HUD_SCALE, sp.y * Config.HUD_SCALE)
+
+
 func _scene_pos(pos: Vector2) -> Variant:
 	return chain.scene_pos(pos)
 
@@ -584,8 +594,29 @@ func _mouse_press(pos: Vector2, button: int) -> void:
 		_transition(_start_run)
 	elif mode == "intro" and mode_t > 0.6:
 		_set_mode("play")
-	elif mode == "clear" and not options.is_empty():
-		_choose(sel)
+	elif mode == "settings" and button == MOUSE_BUTTON_LEFT:
+		var hp := _hud_pos(pos)
+		var row := hud.settings_row_at(hp, settings_sel)
+		if row >= 0:
+			settings_sel = row
+			# rechte Haelfte = Wert erhoehen, linke = senken, Mitte = nur waehlen
+			var w := float(View.W)
+			if hp.x > w * 0.62:
+				_settings_adjust(1)
+			elif hp.x < w * 0.38:
+				_settings_adjust(-1)
+			else:
+				audio.play("target")
+	elif mode == "clear" and not options.is_empty() and button == MOUSE_BUTTON_LEFT:
+		var card := hud.option_at(_hud_pos(pos), options.size(), sel)
+		if card >= 0:
+			if card == sel:
+				_choose(sel)
+			else:
+				sel = card
+				audio.play("target")
+		else:
+			_choose(sel)
 
 
 ## Diskrete Aktionen als Ereignisse (wie keyPressEvent im Original). Ereignisse statt
