@@ -34,7 +34,11 @@ const MAGENTA := DCity.MAGENTA
 const AMBER := DCity.AMBER
 const VIOLET := DCity.VIOLET
 
-const W := Config.RENDER_W
+## Bildbreite zur Laufzeit (View.W: 640 ohne View.setup, sonst 480..960); Höhe fest.
+## Alle Verwendungen meinen die BILDSCHIRMBREITE (Mitte, Ränder, Kulling, Breitenschleifen,
+## Viewport-/Kachelgrößen); der Maßstab hängt an Persp.PPU_NEAR (Basisbreite 640).
+static var W: int:
+	get: return View.W
 const H := Config.RENDER_H
 const FAR_F := DCity.FAR_F        # px Scroll pro Welt-Einheit Kamera
 const MID_F := DCity.MID_F
@@ -1758,8 +1762,10 @@ func _ground() -> void:
 	var y0 := fy
 	var y1 := H
 	var rows := y1 - y0
-	var wmin := cam_min - Config.VIEW_SPAN_NEAR / Config.SCALE_FAR
-	var wmax := cam_max + Config.VIEW_SPAN_NEAR / Config.SCALE_FAR
+	# Weltbreite des Bildes in Tiefe 0 (bei 640 genau VIEW_SPAN_NEAR / SCALE_FAR)
+	var span_far := Config.VIEW_SPAN_NEAR * W / Config.RENDER_W / Config.SCALE_FAR
+	var wmin := cam_min - span_far
+	var wmax := cam_max + span_far
 	g_wmin = wmin
 	var gw := int((wmax - wmin) * TPU)
 	var asph: Array = th["asphalt"]

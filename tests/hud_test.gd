@@ -136,6 +136,8 @@ func _ready() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--out="):
 			out = a.substr(6)
+		elif a.begins_with("--view-w="):     # Layout-Probe bei anderer Bildbreite (kein Paritaetsfall)
+			View.W = int(a.substr(9))
 	DirAccess.make_dir_recursive_absolute(out)
 	data = Save._ints(JSON.parse_string(FileAccess.get_file_as_string("res://tests/hud_cases.json")))
 	baker = Baker.new()
@@ -145,7 +147,7 @@ func _ready() -> void:
 	hud = HUD.new()
 	hud_tex = hud.setup(self)
 	comp = SubViewport.new()
-	comp.size = Vector2i(1280, 720)
+	comp.size = Vector2i(HUD.HW, 720)
 	comp.transparent_bg = false
 	comp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	add_child(comp)
@@ -193,10 +195,10 @@ func _job_hud(c: Dictionary, lang: String) -> void:
 					(w as FakeWorld).conf[str(a.uid)] = float(st[2])
 			continue
 		h2.render(w, sc, float(st[0]), st[1])
-	comp.size = Vector2i(1280, 720)
+	comp.size = Vector2i(HUD.HW, 720)
 	cq.begin()
-	cq.fill_rect(0, 0, 1280, 720, QP.rgb(BG))
-	cq.draw_texture(Rect2(0, 0, 1280, 720), hud_tex)
+	cq.fill_rect(0, 0, HUD.HW, 720, QP.rgb(BG))
+	cq.draw_texture(Rect2(0, 0, HUD.HW, 720), hud_tex)
 	cq.end()
 
 

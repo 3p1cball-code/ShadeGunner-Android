@@ -1,9 +1,9 @@
 class_name TextMode
 extends RefCounted
-## Optionaler Text-/ASCII-Darstellungsmodus (Gimmick): zeichnet die 640x360-
+## Optionaler Text-/ASCII-Darstellungsmodus (Gimmick): zeichnet die View.W x 360-
 ## Szene als Zeichenraster in den 16 Farben von noir16.
 ##
-## Ausgabe ist WIEDER eine 640x360-Textur. Die vorhandene CRT-Kette laeuft
+## Ausgabe ist WIEDER eine View.W x 360-Textur (640x360 bei 16:9). Die vorhandene CRT-Kette laeuft
 ## unveraendert darueber, der Roehren-Effekt bleibt also erhalten.
 ##
 ## Einbindung (nach Scene.setup, VOR CRTChain im Baum - Reihenfolge zaehlt!):
@@ -23,7 +23,9 @@ extends RefCounted
 ## alt bzw. die Kette liest einen Frame zu spaet.
 
 const SH := preload("res://shaders/text.gdshader")
-const RW := Config.RENDER_W
+## Bildbreite zur Laufzeit (View.W), Höhe fest.
+static var RW: int:
+	get: return View.W
 const RH := Config.RENDER_H
 const MIN_CELL := 4
 const MAX_CELL := 32
@@ -57,7 +59,7 @@ var _mat: ShaderMaterial
 var _scene: Texture2D
 
 
-## Baut den Text-Viewport unter parent und liefert dessen 640x360-Textur.
+## Baut den Text-Viewport unter parent und liefert dessen View.W x 360-Textur.
 func setup(parent: Node, scene_tex: Texture2D) -> Texture2D:
 	_scene = scene_tex
 	vp = SubViewport.new()

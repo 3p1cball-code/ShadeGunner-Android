@@ -4,10 +4,14 @@ class_name Persp
 ## Tiefe d: 0 = hintere Bordsteinkante, 1 = vorne. Skala und Bild-y sind beide
 ## linear in d - exakt eine Zentralperspektive mit Horizont bei horizon_px().
 
-const W := Config.RENDER_W
+## Bildbreite zur Laufzeit (View.W, 640 ohne View.setup); Höhe fest.
+static var W: int:
+	get: return View.W
 const H := Config.RENDER_H
 const _Y0 := Config.FLOOR_TOP_Y * Config.RENDER_H
 const _Y1 := Config.FLOOR_BOTTOM_Y * Config.RENDER_H
+# Maßstab: bleibt auf der Basisbreite 640 - eine breitere Ansicht zeigt mehr Straße,
+# die Figuren werden nicht größer.
 const PPU_NEAR := float(Config.RENDER_W) / Config.VIEW_SPAN_NEAR
 const FACADE_Y := _Y0 + (_Y1 - _Y0) * Config.FACADE_DEPTH
 const FACADE_PPU := PPU_NEAR * (Config.SCALE_FAR + (1.0 - Config.SCALE_FAR) * Config.FACADE_DEPTH)
@@ -29,16 +33,16 @@ static func depth_at_y(y: float) -> float:
 
 
 static func ppu(d: float) -> float:
-	## Bildschirm-Pixel pro Welt-Einheit in Tiefe d.
+	## Bildschirm-Pixel pro Welt-Einheit in Tiefe d (Maßstab: Basisbreite, nicht View.W).
 	return (Config.RENDER_W / Config.VIEW_SPAN_NEAR) * scale(d)
 
 
 static func screen_x(x: float, d: float, cam_x: float) -> float:
-	return Config.RENDER_W * 0.5 + (x - cam_x) * ppu(d)
+	return View.W * 0.5 + (x - cam_x) * ppu(d)
 
 
 static func world_x(sx: float, d: float, cam_x: float) -> float:
-	return cam_x + (sx - Config.RENDER_W * 0.5) / ppu(d)
+	return cam_x + (sx - View.W * 0.5) / ppu(d)
 
 
 static func figure_h(d: float) -> float:

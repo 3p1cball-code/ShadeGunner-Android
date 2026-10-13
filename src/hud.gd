@@ -13,8 +13,13 @@ extends RefCounted
 ## world/scene sind die Godot-Gegenstücke mit den Python-Namen (sim.py / scene.py).
 
 const S := Config.HUD_SCALE
-const HW := DHud.HW
+## HUD-Breite zur Laufzeit (View.W x HUD_SCALE, 1280 bei 16:9); Höhe fest 720.
+## Rechts ausgerichtetes hängt an HW, Mittiges an HW/2. Bei HW = 1280 ist das HUD
+## pixelgleich zum Original; schmaler (bis 960 = 4:3) wird umgebrochen bzw. umgestellt.
+static var HW: int:
+	get: return View.hud_w()
 const HH := DHud.HH
+const BASE_HW := DHud.HW
 const C := DHud.C
 const VOID := DHud.VOID
 const NIGHT := DHud.NIGHT
@@ -41,6 +46,19 @@ const EYE_PX := DHud.EYE_PX
 const EYE_LIFE := DHud.EYE_LIFE
 const ORDER := DDetection.ORDER
 const TELLS := DDetection.TELLS
+
+# Ziel-Panel links unten (_target_panel): rechte Kante + Abstand, Oberkante
+const TARGET_X1 := 34 + 306 + 16
+const TARGET_Y0 := DHud.HH - 188
+# Einstellungsmenü (_settings / settings_row_at)
+const SET_W := 720
+const SET_ROWH := 42
+const SET_GAP := 10
+const SET_Y := 176
+const SET_MAXROWS := 8          # war 9: dann lagen die Hinweise auf der letzten Zeile
+# Upgrade-Wahl (_clear / option_at)
+const CLEAR_Y := 380
+const CLEAR_H := 190
 
 # Zeilen des Einstellungsmenüs: [Schlüssel, Label, Wert-Funktion, Art]
 static var SETTING_ROWS: Array = _make_setting_rows()
@@ -102,7 +120,7 @@ static func _make_setting_rows() -> Array:
 		["fog", "NEBEL", func(s: Dictionary) -> String: return "AN" if s.get("fog", true) else "AUS", "toggle"],
 		["fx", "FX", func(s: Dictionary) -> String: return "AN" if s.get("fx", true) else "AUS", "toggle"],
 		["aspect", "BILDFORMAT", func(s: Dictionary) -> String:
-			return "VOLL (AUTO)" if s.get("aspect", "auto") == "auto" else "16:9 BALKEN", "toggle"],
+			return "AUTO (BILDSCHIRM)" if s.get("aspect", "auto") == "auto" else "16:9", "toggle"],
 		["render_mode", "DARSTELLUNG", func(s: Dictionary) -> String: return "TEXT" if s.get("render_mode", "crt") == "text" else "CRT", "toggle"],
 		["touch", "TOUCH-STEUERUNG", func(s: Dictionary) -> String: return String({"auto": "AUTO", "an": "AN", "aus": "AUS"}.get(s.get("touch", "auto"), "AUTO")), "cycle"],
 		["resolution", "AUFLÖSUNG", func(s: Dictionary) -> String: return "%s x %s" % [_istr(s["resolution"][0]), _istr(s["resolution"][1])], "cycle"],
@@ -206,6 +224,75 @@ func _bar(q: QP, x: float, y: float, w: float, h: float, frac: float, col: Array
 func _t(q: QP, x: float, y: float, s: String, col: Array, scale: int = 2,
 		align: String = "left", opacity: float = 1.0) -> int:
 	return Pixfont.draw(q, x, y, I18n.t(s), col, scale, VOID, align, opacity)
+
+
+# ------------------------------------------------------------------ variable Breite
+## Schmaler als 16:9 (HW < 1280)? Nur dann greift das umgestellte Layout - bei 16:9
+## und breiter bleibt alles exakt wie im Original (HUD-Paritaet).
+static func narrow() -> bool:
+	return HW < BASE_HW
+
+
+## Zeilen, die in max_w Pixel (Schrift scale) passen; Wörter werden nicht getrennt,
+## ein zu langes Einzelwort bekommt eine eigene Zeile.
+static func wrap_px(text: String, max_w: int, scale: int = 2) -> Array:
+	return wrap_(text, maxi(1, Py.ifloordiv(max_w + scale, Pixfont.ADV * scale)))
+
+
+## Zentrierter Meldungstext (Original: HW/2). Schmal: unten neben dem Ziel-Panel
+## (das links unten bis x = TARGET_X1 reicht), notfalls umbrochen - nach unten oder
+## (up) nach oben. reveal >= 0 zeigt nur so viele Zeichen (Schreibmaschine), der
+## Umbruch richtet sich dabei nach dem ganzen Text, damit nichts springt.
+func _ct(q: QP, y: float, s: String, col: Array, scale: int = 2, opacity: float = 1.0,
+		up: bool = false, translated: bool = false, reveal: int = -1) -> void:
+	var txt := s if translated else I18n.t(s)
+	if not narrow():
+		Pixfont.draw(q, Py.ifloordiv(HW, 2), y, txt if reveal < 0 else txt.substr(0, reveal), col, scale, VOID, "center", opacity)
+		return
+	var lo := 16
+	if y + 7 * scale > TARGET_Y0:
+		lo = TARGET_X1
+	var hi := HW - 16
+	var tw := Pixfont.text_width(txt, scale)
+	var cx := Py.ifloordiv(lo + hi, 2)       # unten: Mitte der freien Fläche rechts vom Ziel-Panel
+	var lines: Array = [txt]
+	if tw > hi - lo:
+		lines = wrap_px(txt, hi - lo, scale)
+	var lh := 11 * scale
+	var y0 := y - (lh * (lines.size() - 1) if up else 0)
+	var left := reveal if reveal >= 0 else txt.length()
+	for i in lines.size():
+		var ln: String = lines[i]
+		if left <= 0:
+			break
+		Pixfont.draw(q, cx, y0 + i * lh, ln.substr(0, left), col, scale, VOID, "center", opacity)
+		left -= ln.length() + 1
+
+
+## Einstellungszeile unter einer HUD-Position (für Touch), -1 = keine. Gleiche Geometrie
+## und gleiches Scrollen wie _settings().
+func settings_row_at(hud_pos: Vector2, sel: int) -> int:
+	var g := _settings_geom(sel)
+	for i in range(int(g["first"]), int(g["last"])):
+		var r := Rect2(g["x"], int(g["y"]) + (i - int(g["first"])) * (SET_ROWH + SET_GAP), SET_W, SET_ROWH)
+		if r.has_point(hud_pos):
+			return i
+	return -1
+
+
+## Upgrade-Karte unter einer HUD-Position (für Touch), -1 = keine. Gleiche Geometrie
+## wie _clear(): mit sel exakt (die gewählte Karte ist 8 px angehoben), ohne sel
+## zählt bei jeder Karte der ganze Bereich von angehoben bis abgesenkt.
+func option_at(hud_pos: Vector2, n: int, sel: int = -1) -> int:
+	var g := _clear_geom()
+	for i in n:
+		var x := int(g["x0"]) + i * (int(g["cw"]) + int(g["gap"]))
+		var r := Rect2(x, CLEAR_Y - 8, int(g["cw"]), CLEAR_H + 8)
+		if sel >= 0:
+			r = Rect2(x, CLEAR_Y + (-8 if i == sel else 0), int(g["cw"]), CLEAR_H)
+		if r.has_point(hud_pos):
+			return i
+	return -1
 
 
 # ------------------------------------------------------------------ Haupt
@@ -418,12 +505,12 @@ func _events(q: QP, world: Variant) -> void:
 	var P: Variant = _ga(world, "patrol")
 	if P != null and (P as Dictionary).get("phase") in ["descend", "landed"]:
 		var txt := "SPINNER LANDET - ABSTAND HALTEN" if P["phase"] == "descend" else "POLIZEIKONTROLLE AM BODEN"
-		_t(q, Py.ifloordiv(HW, 2), HH - 176, txt, [90, 140, 255] if int(t_ * 4) % 2 else MAGENTA, 2, "center")
+		_ct(q, HH - 176, txt, [90, 140, 255] if int(t_ * 4) % 2 else MAGENTA, 2, 1.0, true)
 	if _truthy(_ga(world, "watched", false)):
 		var col: Array = RED if int(t_ * 3) % 2 else AMBER
-		_t(q, Py.ifloordiv(HW, 2), HH - 150, "IM SUCHLICHT - DIE POLIZEI SIEHT ZU", col, 2, "center")
+		_ct(q, HH - 150, "IM SUCHLICHT - DIE POLIZEI SIEHT ZU", col)
 	elif P != null and float(P["on"]) > 0.5:
-		_t(q, Py.ifloordiv(HW, 2), HH - 150, "SUCHLICHT: AUGENREFLEXE WERDEN SICHTBAR", PALE, 2, "center")
+		_ct(q, HH - 150, "SUCHLICHT: AUGENREFLEXE WERDEN SICHTBAR", PALE)
 	if float(_ga(world, "blackout_t", 0)) > 0:
 		if int(t_ * 2.5) % 2 == 0:
 			_t(q, Py.ifloordiv(HW, 2), 196, "STROMAUSFALL", AMBER, 4, "center")
@@ -453,6 +540,8 @@ func _boss(q: QP, world: Variant) -> void:
 	var h2 := 30
 	var x2 := Py.ifloordiv(HW - w2, 2)
 	var y2 := 64
+	if x2 < 34 + 410 + 8:          # schmal: oben ist kein Platz zwischen den Panels
+		y2 = 24 + 136 + 64
 	q.fill_rect(x2, y2, w2, h2, QP.c(6, 8, 14, 225))
 	q.set_pen(QP.rgb(CRIMSON), 2.0)
 	q.set_no_brush()
@@ -470,7 +559,10 @@ func _boss(q: QP, world: Variant) -> void:
 		var line := I18n.t(Config.ROY_LINES[int(_ga(world, "boss_line", 0))])
 		var k := 1.0 - float(world.boss_speak_t) / Config.ROY_SPEAK_S
 		var n := int(line.length() * minf(1.0, k * 1.35))
-		_t(q, Py.ifloordiv(HW, 2), HH - 172, "ROY: " + line.substr(0, maxi(0, n)), PALE, 2, "center")
+		if narrow():
+			_ct(q, HH - 172, "ROY: " + line, PALE, 2, 1.0, true, true, 5 + maxi(0, n))
+		else:
+			_t(q, Py.ifloordiv(HW, 2), HH - 172, "ROY: " + line.substr(0, maxi(0, n)), PALE, 2, "center")
 
 
 func _reticle(q: QP, mouse: Variant, world: Variant) -> void:
@@ -520,11 +612,33 @@ func _panels(q: QP, world: Variant, _ui: Dictionary) -> void:
 		var line2 := ", ".join(PackedStringArray(world.bounty_desc))
 		var status := "KASSIERT ✓" if done else ("ENTKOMMEN ✗" if b.escaped else ("" if not gone else "✗"))
 		var bw := maxi(Pixfont.text_width(line2, 2), Pixfont.text_width(line1 + "  " + status, 2)) + 28
-		_box(q, ox, oy + 96, bw, 58, AMBER if not done else TEAL, [6, 8, 14], 190)
+		var lines2: Array = [line2]
+		var maxbw := HW - 34 - 410 - 16 - ox      # bis vor das rechte Panel
+		if bw > maxbw:
+			# Beschreibung umbrechen (Merkmale bleiben ganz, solange sie passen)
+			lines2 = []
+			var cur := ""
+			for part: String in world.bounty_desc:
+				var cand := part if cur == "" else cur + ", " + part
+				if cur != "" and Pixfont.text_width(cand + ",", 2) + 28 > maxbw:
+					lines2.append(cur + ",")
+					cur = part
+				else:
+					cur = cand
+			lines2.append(cur)
+			var fixed: Array = []
+			for ln: String in lines2:
+				fixed.append_array(wrap_px(ln, maxbw - 28) if Pixfont.text_width(ln, 2) + 28 > maxbw else [ln])
+			lines2 = fixed
+			bw = Pixfont.text_width(line1 + "  " + status, 2) + 28
+			for ln: String in lines2:
+				bw = maxi(bw, Pixfont.text_width(ln, 2) + 28)
+		_box(q, ox, oy + 96, bw, 58 + 22 * (lines2.size() - 1), AMBER if not done else TEAL, [6, 8, 14], 190)
 		_t(q, ox + 14, oy + 106, line1, AMBER if not done else TEAL)
 		if status != "":
 			_t(q, ox + bw - 14, oy + 106, status, GREEN if done else RED, 2, "right")
-		_t(q, ox + 14, oy + 128, line2, PALE if not done else SLATE)
+		for i in lines2.size():
+			_t(q, ox + 14, oy + 128 + 22 * i, lines2[i], PALE if not done else SLATE)
 	# oben rechts
 	var rx := HW - 34 - 410
 	_box(q, rx, oy, 410, 136)
@@ -565,6 +679,9 @@ func _panels(q: QP, world: Variant, _ui: Dictionary) -> void:
 	var px0 := Py.ifloordiv(HW, 2) - 160
 	var pw := 320
 	var py := oy + 22
+	if px0 < ox + 410 + 16:        # schmal: zwischen den Panels ist kein Platz -> unter das rechte
+		px0 = rx + Py.ifloordiv(410 - pw, 2)
+		py = oy + 136 + 26
 	q.fill_rect(px0, py, pw, 2, QP.rgb(SLATE))
 	var f := maxf(0.0, minf(1.0, float(world.player.x) / float(world.length)))
 	var open_: bool = world.exit_open()
@@ -572,7 +689,7 @@ func _panels(q: QP, world: Variant, _ui: Dictionary) -> void:
 	Pixfont.draw(q, px0 + pw * f - 4, py - 14, "▼", CYAN, 2, VOID)
 	var ecol: Array = GREEN if open_ else RED
 	q.fill_rect(px0 + pw - 2, py - 6, 4, 14, QP.rgb(ecol))
-	_t(q, Py.ifloordiv(HW, 2), py + 12, "AUSGANG OFFEN" if open_ else "AUSGANG GESPERRT", ecol, 2, "center")
+	_t(q, px0 + Py.ifloordiv(pw, 2), py + 12, "AUSGANG OFFEN" if open_ else "AUSGANG GESPERRT", ecol, 2, "center")
 	# Ziel-Panel
 	_target_panel(q, world)
 	# Status / Meldungen
@@ -586,28 +703,36 @@ func _panels(q: QP, world: Variant, _ui: Dictionary) -> void:
 	_msg_t = maxf(0.0, _msg_t - _dt)
 	if _msg_t > 0 and _msg != "":
 		var col: Array = RED if (_msg.contains("MENSCH") or _msg.contains("entkommen")) else PALE
-		_t(q, Py.ifloordiv(HW, 2), HH - 120, _upper(_msg), col, 2, "center", minf(1.0, _msg_t))
+		_ct(q, HH - 120, _upper(_msg), col, 2, minf(1.0, _msg_t), true)
 	var hold: float = float(_ga(world, "shout_hold", -1.0))
 	if hold >= Config.SHOUT_TAP:
 		if float(world.shout_cd) > 0:
-			_t(q, Py.ifloordiv(HW, 2), HH - 92, "RUF LÄDT NOCH - LOSLASSEN BRICHT AB", SLATE, 2, "center")
+			_ct(q, HH - 92, "RUF LÄDT NOCH - LOSLASSEN BRICHT AB", SLATE)
 		else:
 			var k := minf(1.0, (hold - Config.SHOUT_TAP) / Config.SHOUT_CHARGE)
-			_t(q, Py.ifloordiv(HW, 2), HH - 92, I18n.t("LOSLASSEN: ALLE RUNTER!   RADIUS {:3d}%", [int(k * 100)]), AMBER, 2, "center")
+			_ct(q, HH - 92, I18n.t("LOSLASSEN: ALLE RUNTER!   RADIUS {:3d}%", [int(k * 100)]), AMBER)
 	elif hold >= 0.0:
-		_t(q, Py.ifloordiv(HW, 2), HH - 92, "TIPPEN = ZIEL ANSPRECHEN   HALTEN = MENGE", SLATE, 2, "center")
+		_ct(q, HH - 92, "TIPPEN = ZIEL ANSPRECHEN   HALTEN = MENGE", SLATE)
 	if world.aiming:
 		var bl: Variant = world.blocker
 		var tg: Variant = world.target
 		var hint := "      C / RMT = ABBRECHEN"
+		var main := ""
+		var mcol: Array = ASH
 		if bl != null and not is_same(bl, tg):
-			_t(q, Py.ifloordiv(HW, 2), HH - 92, "SCHUSSLINIE BLOCKIERT" + hint, AMBER, 2, "center")
+			main = "SCHUSSLINIE BLOCKIERT"
+			mcol = AMBER
 		elif tg != null:
 			var ready: bool = float(world.aim_t) >= float(world.run.mods["aim_min"])
-			_t(q, Py.ifloordiv(HW, 2), HH - 92, ("ZIEL ERFASST - LOSLASSEN = FEUER" if ready else "ZIELEN...") + hint,
-				RED if ready else ASH, 2, "center")
+			main = "ZIEL ERFASST - LOSLASSEN = FEUER" if ready else "ZIELEN..."
+			mcol = RED if ready else ASH
 		else:
-			_t(q, Py.ifloordiv(HW, 2), HH - 92, "KEIN ZIEL - SCHUSS GERADEAUS" + hint, ASH, 2, "center")
+			main = "KEIN ZIEL - SCHUSS GERADEAUS"
+		if narrow():               # schmal: Abbruch-Hinweis in eine eigene Zeile darunter
+			_ct(q, HH - 92, main, mcol)
+			_ct(q, HH - 70, I18n.t(hint).strip_edges(), mcol, 2, 1.0, false, true)
+		else:
+			_t(q, Py.ifloordiv(HW, 2), HH - 92, main + hint, mcol, 2, "center")
 	_t(q, HW - 48, HH - 44, "H HILFE  P PAUSE", SLATE, 2, "right")
 
 
@@ -703,8 +828,8 @@ func _title(q: QP, ui: Dictionary) -> void:
 	_dim(q, 158)
 	# (Original legt hier ein ungenutztes Random(7) an - ohne Wirkung)
 	# --- Pseudo-Kana streifen (Neon) ---
-	_kana(q, PyRandom.new(3), 470, 96, 20, VIOLET, 2, t_)
-	_kana(q, PyRandom.new(9), 470, 600, 20, MAGENTA, 2, t_ + 1.3)
+	_kana(q, PyRandom.new(3), Py.ifloordiv(HW, 2) - 170, 96, 20, VIOLET, 2, t_)
+	_kana(q, PyRandom.new(9), Py.ifloordiv(HW, 2) - 170, 600, 20, MAGENTA, 2, t_ + 1.3)
 
 	# --- Titel mit RGB-Split, Doppelkontur und Glitch ---
 	var title := "SHADEGUNNER"
@@ -796,16 +921,17 @@ func _settings(q: QP, ui: Dictionary) -> void:
 	var s: Dictionary = ui.get("settings", {})
 	var sel: int = ui.get("settings_sel", 0)
 	_t(q, Py.ifloordiv(HW, 2), 120, "EINSTELLUNGEN", WHITE, 5, "center")
-	var w := 720
-	var rowh := 42
-	var gap := 10
-	var x := Py.ifloordiv(HW - w, 2)
-	var y := 176
-	var maxrows := 9
-	var first := clampi(sel - maxrows / 2, 0, maxi(0, SETTING_ROWS.size() - maxrows))
+	var g := _settings_geom(sel)
+	var w := SET_W
+	var rowh := SET_ROWH
+	var gap := SET_GAP
+	var x: int = g["x"]
+	var y: int = g["y"]
+	var maxrows := SET_MAXROWS
+	var first: int = g["first"]
 	if first > 0:
 		_t(q, Py.ifloordiv(HW, 2), y - 22, "▲ MEHR", SLATE, 2, "center")
-	for i in range(first, mini(first + maxrows, SETTING_ROWS.size())):
+	for i in range(first, int(g["last"])):
 		var row: Array = SETTING_ROWS[i]
 		var label: String = row[1]
 		var val: Callable = row[2]
@@ -819,13 +945,25 @@ func _settings(q: QP, ui: Dictionary) -> void:
 			_t(q, x + Py.ifloordiv(w, 2) + 60, y0 + 15, "←  →", AMBER, 2, "center")
 	if first + maxrows < SETTING_ROWS.size():
 		_t(q, Py.ifloordiv(HW, 2), y + maxrows * (rowh + gap) - 6, "▼ MEHR", SLATE, 2, "center")
-	var note := HH - 96
+	# Hinweise unter der Liste (unter "▼ MEHR"), nicht mehr über der letzten Zeile
+	var note := y + maxrows * (rowh + gap) + 16
 	if s.get("renderer") == "software":
 		_t(q, Py.ifloordiv(HW, 2), note, "RENDERER WECHSELT MIT DEM NÄCHSTEN START", SLATE, 2, "center")
 		note += 22
+	if str(s.get("aspect", "auto")) != View.aspect_used and View.aspect_used != "":
+		_t(q, Py.ifloordiv(HW, 2), note, "BILDFORMAT WECHSELT MIT DEM NÄCHSTEN START", SLATE, 2, "center")
+		note += 22
 	if SETTING_ROWS[sel][0] == "difficulty":
 		_t(q, Py.ifloordiv(HW, 2), note, "MEHR MENSCHEN JE VIERTEL - GILT AB DEM NÄCHSTEN EINSATZ", SLATE, 2, "center")
-	_t(q, Py.ifloordiv(HW, 2), HH - 70, "▲▼  WÄHLEN      ← →  ÄNDERN      ESC / S  ZURÜCK", ASH, 2, "center")
+		note += 22
+	_t(q, Py.ifloordiv(HW, 2), maxi(HH - 70, note + 2), "▲▼  WÄHLEN      ← →  ÄNDERN      ESC / S  ZURÜCK", ASH, 2, "center")
+
+
+## Lage der sichtbaren Einstellungszeilen: x, y (erste Zeile), first, last (exkl.).
+static func _settings_geom(sel: int) -> Dictionary:
+	var n := SETTING_ROWS.size()
+	var first := clampi(sel - Py.ifloordiv(SET_MAXROWS, 2), 0, maxi(0, n - SET_MAXROWS))
+	return {"x": Py.ifloordiv(HW - SET_W, 2), "y": SET_Y, "first": first, "last": mini(first + SET_MAXROWS, n)}
 
 
 func _pause(q: QP) -> void:
@@ -864,26 +1002,40 @@ func _clear(q: QP, world: Variant, ui: Dictionary) -> void:
 		return
 	_t(q, Py.ifloordiv(HW, 2), 330, "AUSRÜSTUNG WÄHLEN", PALE, 3, "center")
 	var sel: int = ui.get("sel", 0)
-	var cw := 360
-	var ch := 190
-	var gap := 30
-	var x0 := Py.ifloordiv(HW - (3 * cw + 2 * gap), 2)
+	var g := _clear_geom()
+	var cw: int = g["cw"]
+	var ch := CLEAR_H
+	var gap: int = g["gap"]
+	var x0: int = g["x0"]
+	var chars: int = g["chars"]
 	for i in opts.size():
 		var o: Array = opts[i]
 		var title: String = o[1]
 		var desc: String = o[2]
 		var x := x0 + i * (cw + gap)
-		var yo := 380
+		var yo := CLEAR_Y
 		var on := i == sel
 		var lift := -8 if on else 0
 		_box(q, x, yo + lift, cw, ch, CYAN if on else INDIGO, [6, 8, 14], 235)
 		_t(q, x + 16, yo + lift + 16, str(i + 1), AMBER if on else SLATE, 3)
 		_t(q, x + 52, yo + lift + 22, I18n.t(title), WHITE if on else ASH, 2)
 		var yy := yo + lift + 70
-		for line: String in wrap_(I18n.t(desc), 26):
+		for line: String in wrap_(I18n.t(desc), chars):
 			_t(q, x + 16, yy, line, PALE if on else SLATE, 2)
 			yy += 22
 	_t(q, Py.ifloordiv(HW, 2), HH - 50, "1-3 / PFEILE + ENTER", SLATE, 2, "center")
+
+
+## Kartenraster der Upgrade-Wahl: 3 x 360 mit 30 Abstand; schmal so breit wie möglich.
+static func _clear_geom() -> Dictionary:
+	var cw := 360
+	var gap := 30
+	var chars := 26
+	if 3 * cw + 2 * gap > HW - 40:
+		gap = 20
+		cw = Py.ifloordiv(HW - 40 - 2 * gap, 3)
+		chars = Py.ifloordiv(cw - 32, Pixfont.ADV * 2)
+	return {"cw": cw, "gap": gap, "chars": chars, "x0": Py.ifloordiv(HW - (3 * cw + 2 * gap), 2)}
 
 
 func _end(q: QP, world: Variant, ui: Dictionary, won: bool) -> void:
@@ -950,6 +1102,26 @@ func _help(q: QP) -> void:
 	]
 	var lh := 23
 	var w := 1160
+	if w > HW - 40:
+		# schmal: Box an die Breite anpassen, lange Zeilen umbrechen (Folgezeilen eingerückt:
+		# Steuerung unter die Beschreibungsspalte, Regeln um zwei Zeichen) und enger setzen
+		w = HW - 40
+		var wrapped: Array = []
+		for e: Array in lines:
+			var txt := I18n.t(String(e[0]))
+			var indent := "                    " if e[1] == ASH else "  "
+			var parts := _help_wrap(txt, Py.ifloordiv(w - 60 + 2, Pixfont.ADV * 2), indent)
+			for ln: String in parts:
+				wrapped.append([ln, e[1]])
+		lines = wrapped
+		lh = mini(23, Py.ifloordiv(HH - 20 - 40, lines.size()))
+		var h2 := lines.size() * lh + 40
+		var x2 := Py.ifloordiv(HW - w, 2)
+		var y2 := Py.ifloordiv(HH - h2, 2)
+		_box(q, x2, y2, w, h2, CYAN, [6, 8, 14], 240)
+		for i in lines.size():
+			Pixfont.draw(q, x2 + 30, y2 + 20 + i * lh, String(lines[i][0]), lines[i][1], 2, VOID)
+		return
 	var h := lines.size() * lh + 40
 	var x := Py.ifloordiv(HW - w, 2)
 	var y := Py.ifloordiv(HH - h, 2)
@@ -958,3 +1130,24 @@ func _help(q: QP) -> void:
 	for e: Array in lines:
 		_t(q, x + 30, yy, e[0], e[1], 2)
 		yy += lh
+
+
+## Umbruch einer (bereits übersetzten) Hilfezeile auf n Zeichen; die Spalten der
+## ersten Zeile bleiben erhalten (Leerzeichenfolgen werden nicht zusammengezogen).
+static func _help_wrap(txt: String, n: int, indent: String) -> Array:
+	if txt.length() <= n:
+		return [txt]
+	var out: Array = []
+	var rest := txt
+	var pre := ""
+	while (pre + rest).length() > n:
+		var room := n - pre.length()
+		var cut := rest.rfind(" ", room)
+		if cut <= 0:
+			cut = room
+		out.append(pre + rest.substr(0, cut).strip_edges(false, true))
+		rest = rest.substr(cut).strip_edges(true, false)
+		pre = indent
+	if rest != "":
+		out.append(pre + rest)
+	return out

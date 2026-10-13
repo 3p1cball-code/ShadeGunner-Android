@@ -4,6 +4,10 @@ extends RefCounted
 ## renderer: "auto" (OpenGL, sonst Software) | "software" (immer CPU)
 
 const DEFAULTS := DSettings.DEFAULTS
+## Nur im Port vorhandene Einstellungen (nicht in DEFAULTS, Vorgaben liefert game.gd per
+## get(..., default)). Ohne diese Liste verwarf load_() sie - z. B. "aspect" galt nie
+## über einen Neustart hinaus.
+const PORT_KEYS := ["aspect", "quality", "reflections", "rain", "fog", "fx", "render_mode", "touch"]
 
 
 static func _path() -> String:
@@ -15,7 +19,7 @@ static func load_() -> Dictionary:
 	var data: Variant = Save._read_json(_path(), false)
 	if data is Dictionary:
 		for k: Variant in data:
-			if DEFAULTS.has(k):
+			if DEFAULTS.has(k) or k in PORT_KEYS:
 				d[k] = data[k]
 	var r: Variant = d.get("resolution")
 	if r is Array:
