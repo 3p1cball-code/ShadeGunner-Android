@@ -34,12 +34,13 @@ func _cos_col() -> Color:
 func _cells(cells: Array[Vector2i], col: Color) -> void:
 	if cells.is_empty():
 		return
-	var it := _seg("")
+	var it := _seg(SEG_N)
 	var pc := _pc(col)
 	RenderingServer.canvas_item_add_set_transform(it, Transform2D.IDENTITY)
 	for c in cells:
 		RenderingServer.canvas_item_add_rect(it, Rect2(c.x, c.y, 1, 1), pc)
 	RenderingServer.canvas_item_add_set_transform(it, _gx())
+	_item_thin = false
 
 
 func _stroke(a: Vector2, b: Vector2) -> void:
@@ -109,7 +110,7 @@ func draw_polyline(pts: PackedVector2Array) -> void:
 
 ## Deckender dicker Pfad: Segmente flach, Stöße als Bevel, Kappen nur an offenen Enden.
 func _thick_path(pts: PackedVector2Array) -> void:
-	var it := _seg("")
+	var it := _seg(SEG_N)
 	var col := _pc(pen_col)
 	var hw := pen_w * 0.5
 	var closed := pts.size() > 2 and pts[0].is_equal_approx(pts[pts.size() - 1])
@@ -226,7 +227,7 @@ func _scaled_image(dst: Rect2, img: QImg, s: Rect2) -> void:
 	var xend := ((basex + ix * (wc - 1)) & 0xFFFFFFFF) >> 16
 	if xend >= iw:
 		wc -= 1
-	var it := _seg("")
+	var it := _seg(SEG_N)
 	var tex := img.tex.get_rid()
 	var mod := _tm()
 	var org := img.region.position
@@ -243,6 +244,7 @@ func _scaled_image(dst: Rect2, img: QImg, s: Rect2) -> void:
 			su = (su + ix) & 0xFFFFFFFF
 		srcy = (srcy + iy) & 0xFFFFFFFF
 	RenderingServer.canvas_item_add_set_transform(it, _gx())
+	_item_thin = false
 
 
 ## Kontur als geschlossener Pfad (Qt strichelt den Pfad am Stück).

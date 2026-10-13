@@ -76,6 +76,14 @@ var wisps: Array = []         # Nebelschwaden, die durchs Vordergrundbild ziehen
 var _reflk := 1.0             # getattr(self, "_reflk", 1.0)
 var _beam_poly: Variant = null
 
+# Leistungs-Optionen (werden von den Einstellungen/game.gd gesetzt; Default = volle Pracht)
+var opt_reflections := true
+var opt_rain := "viel"        # "viel" | "wenig" | "aus"
+var opt_fog := true
+var opt_fx := true
+var opt_quality := "hoch"     # Sammelstufe (derzeit nur "hoch")
+var _rain_applied := "viel"   # zuletzt auf FX angewandte Regen-Stufe
+
 # Godot-Ziele
 var baker: Baker
 var _p: QP
@@ -288,6 +296,18 @@ static func _billboard_frames(bk: Baker, brng: PyRandom, bw: int, bh: int, kind:
 
 
 # ------------------------------------------------------------------ Zone
+## Regenmenge gemäß opt_rain auf FX anwenden (Ausgangsmenge der Zone bleibt sonst gleich).
+func _apply_rain() -> void:
+	var f := 1.0
+	match opt_rain:
+		"wenig":
+			f = 0.6
+		"aus":
+			f = 0.0
+	fx.set_rain(float(city.th["rain"]) * f)
+	_rain_applied = opt_rain
+
+
 func ensure_zone(zone_index: int, seed_: int, length: Variant = null) -> void:
 	if length == null:
 		length = (DSim.ZONES[zone_index] as Dictionary)["length"]
@@ -297,7 +317,7 @@ func ensure_zone(zone_index: int, seed_: int, length: Variant = null) -> void:
 	_zone_key = key
 	city = City.new(zone_index, float(length), seed_)
 	var th: Dictionary = city.th
-	fx.set_rain(th["rain"])
+	_apply_rain()
 	var zr := PyRandom.new(seed_ + 77)
 	for fr: Array in bb_frames:      # Godot: alte gebackene Bilder freigeben
 		for im: QImg in fr:
@@ -368,6 +388,8 @@ func frame(world: Variant, dt: float = 1.0 / 60.0, show_player: bool = true, fad
 	var cam_dx := 0.0 if _last_cam == null else (cam - float(_last_cam)) * Persp.PPU_NEAR * 0.6
 	_last_cam = cam
 
+	if opt_rain != _rain_applied:
+		_apply_rain()
 	fx.update_rain(dt, cam_dx)
 	fx.update_steam(dt)
 	fx.update_combat(dt)
@@ -404,7 +426,8 @@ func frame(world: Variant, dt: float = 1.0 / 60.0, show_player: bool = true, fad
 	var fog_amt: float = th["fog_amt"]
 	_fog_d = fog_amt * (0.85 + 1.15 * slow) + bank * 1.1 * fog_amt + 0.06
 	var fd := _fog_d
-	_fog(p, 0, 24, 168, cam * DScene.MID_F * 1.4 + t * 5.0, minf(1.0, fd * 0.9))     # hinter der Skyline
+	if opt_fog:
+		_fog(p, 0, 24, 168, cam * DScene.MID_F * 1.4 + t * 5.0, minf(1.0, fd * 0.9))   # hinter der Skyline
 	_air_traffic(p, e, cam, t, true)
 	_searchlights(p, cam, t)
 	_blimp(p, e, dt, t)
@@ -413,33 +436,41 @@ func frame(world: Variant, dt: float = 1.0 / 60.0, show_player: bool = true, fad
 	_air_traffic(p, e, cam, t, false)
 	_spinners(p, e, dt, t, false)
 	_holos(p, e, cam, t, "giant")
-	_fog_band(p)
-	_fog(p, 0, Persp.FACADE_Y - 122, 128, cam * DScene.MID_F * 1.4 + t * 5.0, minf(1.0, fd * 1.5))
+	if opt_fog:
+		_fog_band(p)
+		_fog(p, 0, Persp.FACADE_Y - 122, 128, cam * DScene.MID_F * 1.4 + t * 5.0, minf(1.0, fd * 1.5))
 	city.facade.draw(p, cam)
 	city.facade.draw(e, cam, city.facade_emit, 0, 0.8 * (1.0 - dark))
 	_facade_life(p, e, cam, t, dt)
 	_street(p, e, cam, t)
 	_holos(p, e, cam, t, "street")
 	_ramen(p, e, world, cam, t, dt)
-	_shout_fx(p, e, world, cam, t)
-	_fog(p, 1, Persp.FACADE_Y - 28, 72, cam * Persp.ppu(0.0) + t * 9.0, minf(1.0, fd * 0.7))
+	if opt_fx:
+		_shout_fx(p, e, world, cam, t)
+	if opt_fog:
+		_fog(p, 1, Persp.FACADE_Y - 28, 72, cam * Persp.ppu(0.0) + t * 9.0, minf(1.0, fd * 0.7))
 	_actors(p, e, world, cam, t, show_player)
 	if dark > 0:
 		p.fill_rect(0, 0, W, H, QP.c(2, 3, 10, int(165 * dark)))
-		_glints(p, e, world, cam, true)
+		if opt_fx:
+			_glints(p, e, world, cam, true)
 		_flashlight(p, e, world, cam)
 	_vehicle_lights(p, e, world, cam, t)
-	_combat(p, e, world, cam, t)
-	fx.draw_steam(p, cam, city.facade.factor)
+	if opt_fx:
+		_combat(p, e, world, cam, t)
+		fx.draw_steam(p, cam, city.facade.factor)
 	_patrol(p, e, world, cam, t)
 	_spinners(p, e, dt, t, true)
-	fx.draw_rain(p, mix(th["fog"], DScene.PALE, 0.55))
-	_beam_rain(p)
-	_fog(p, 1, H - 70, 78, cam * Persp.ppu(1.15) + t * 14.0, minf(1.0, fd * 0.42))
-	# Ganzflächiger Nebelschleier: bei dichter Lage verschwimmt auch der Vordergrund
-	# (Vordergrund liegt "näher an der Kamera", also über allem anderen).
-	_fog_img(p, city.bank, -30, H + 70, cam * Persp.ppu(1.0) * 0.6 + t * 7.0, minf(0.46, fd * 0.34))
-	_wisps(p, dt, cam)
+	if opt_rain != "aus":
+		fx.draw_rain(p, mix(th["fog"], DScene.PALE, 0.55))
+		_beam_rain(p)
+	if opt_fog:
+		_fog(p, 1, H - 70, 78, cam * Persp.ppu(1.15) + t * 14.0, minf(1.0, fd * 0.42))
+		# Ganzflächiger Nebelschleier: bei dichter Lage verschwimmt auch der Vordergrund
+		# (Vordergrund liegt "näher an der Kamera", also über allem anderen).
+		_fog_img(p, city.bank, -30, H + 70, cam * Persp.ppu(1.0) * 0.6 + t * 7.0, minf(0.46, fd * 0.34))
+	if opt_fx:
+		_wisps(p, dt, cam)
 	_foreground(p, cam)
 	e.end()
 
@@ -647,7 +678,7 @@ func _fog(p: QP, idx: int, y: float, fh: float, scroll: float, opacity: float) -
 
 
 func _fog_img(p: QP, im: QImg, y: float, fh: float, scroll: float, opacity: float) -> void:
-	if opacity <= 0.01:
+	if not opt_fog or opacity <= 0.01:
 		return
 	var iw := im.width()
 	var off := Py.mod(scroll, iw)
@@ -854,6 +885,8 @@ func _spinner_lights(p: QP, e: QP, cx: float, gy: float, kx: float, ky: float, d
 
 ## Dunst über der Skyline: die Ferne versinkt stärker im Nebel als die Front.
 func _fog_band(p: QP) -> void:
+	if not opt_fog:
+		return
 	var th: Dictionary = city.th
 	var fy := Persp.FACADE_Y
 	var fd := _fog_d
@@ -1264,17 +1297,18 @@ func _street(p: QP, e: QP, cam: float, t: float) -> void:
 	var x0 := fac.lmin - cam * fac.factor + W * 0.5
 	var band := 12
 	var k := _reflk * (1.0 - 0.8 * dark)
-	for rm: Array in [[city.facade_refl_body, OVER, minf(1.0, 0.8 * k)],
-			[city.facade_refl, PLUS, minf(1.0, 0.95 * k)]]:
-		var refl: QImg = rm[0]
-		p.set_mode(rm[1])
-		p.set_opacity(rm[2])
-		var hlim := mini(refl.height(), H - fy)
-		for kb in range(0, hlim, band):
-			var off := sin(t * 2.3 + kb * 0.37) * 1.2
-			p.draw_image(Rect2(0, fy + kb, W, band), refl, Rect2(-x0 - off, kb, W, band))
-		p.set_opacity(1.0)
-	p.set_mode(OVER)
+	if opt_reflections:
+		for rm: Array in [[city.facade_refl_body, OVER, minf(1.0, 0.8 * k)],
+				[city.facade_refl, PLUS, minf(1.0, 0.95 * k)]]:
+			var refl: QImg = rm[0]
+			p.set_mode(rm[1])
+			p.set_opacity(rm[2])
+			var hlim := mini(refl.height(), H - fy)
+			for kb in range(0, hlim, band):
+				var off := sin(t * 2.3 + kb * 0.37) * 1.2
+				p.draw_image(Rect2(0, fy + kb, W, band), refl, Rect2(-x0 - off, kb, W, band))
+			p.set_opacity(1.0)
+		p.set_mode(OVER)
 	# In Pfützen ist die Fahrbahn noch nasser -> Reflexion dort klar verstärkt.
 	var vis: Array = []
 	var reg_rects: Array = []
@@ -1294,16 +1328,17 @@ func _street(p: QP, e: QP, cam: float, t: float) -> void:
 	if not reg_rects.is_empty():
 		p.save()
 		p.set_clip_ellipses(reg_rects)
-		for rm: Array in [[city.facade_refl_body, OVER, minf(1.0, 0.95 * k)],
-				[city.facade_refl, PLUS, minf(1.0, 1.0 * k)]]:
-			var refl: QImg = rm[0]
-			p.set_mode(rm[1])
-			p.set_opacity(rm[2])
-			var hlim := mini(refl.height(), H - fy)
-			for kb in range(0, hlim, band):
-				var off := sin(t * 2.3 + kb * 0.37) * 1.2
-				p.draw_image(Rect2(0, fy + kb, W, band), refl, Rect2(-x0 - off, kb, W, band))
-			p.set_opacity(1.0)
+		if opt_reflections:
+			for rm: Array in [[city.facade_refl_body, OVER, minf(1.0, 0.95 * k)],
+					[city.facade_refl, PLUS, minf(1.0, 1.0 * k)]]:
+				var refl: QImg = rm[0]
+				p.set_mode(rm[1])
+				p.set_opacity(rm[2])
+				var hlim := mini(refl.height(), H - fy)
+				for kb in range(0, hlim, band):
+					var off := sin(t * 2.3 + kb * 0.37) * 1.2
+					p.draw_image(Rect2(0, fy + kb, W, band), refl, Rect2(-x0 - off, kb, W, band))
+				p.set_opacity(1.0)
 		p.restore()
 		p.set_mode(OVER)
 	# Pfützen-Glanz: heller Schimmer, damit die nassen Stellen als Pfützen erkennbar sind
@@ -1325,24 +1360,25 @@ func _street(p: QP, e: QP, cam: float, t: float) -> void:
 		p.restore()
 	p.set_mode(OVER)
 	# Neon-Spiegelung (live, mit Flackern) - ebenfalls weich
-	p.set_mode(PLUS)
-	var L0 := cam * fac.factor - W * 0.5 - 140
-	for s: City.Sign in city.visible(city.signs, city._sign_x, L0, L0 + W + 180):
-		var x: float = fac.screen_x(s.L, cam)
-		if x < -s.w or x > W or s.lit(t) <= 0 or (dark > 0.4 and Py.imod(s.seed_, 4) != 0):
-			continue
-		var ry := fy + (fy - s.y - s.h)
-		if ry > H:
-			continue
-		var key := "sign%d" % s.get_instance_id()
-		var r: Variant = _refl.get(key)
-		if r == null:
-			r = City.soft_reflection(s.emit)
-			_refl[key] = r
-		p.set_opacity(minf(1.0, 0.48 * k))
-		p.draw_image(Rect2(int(x), ry, s.w, s.h * 1.9), r)
-	p.set_opacity(1.0)
-	p.set_mode(OVER)
+	if opt_reflections:
+		p.set_mode(PLUS)
+		var L0 := cam * fac.factor - W * 0.5 - 140
+		for s: City.Sign in city.visible(city.signs, city._sign_x, L0, L0 + W + 180):
+			var x: float = fac.screen_x(s.L, cam)
+			if x < -s.w or x > W or s.lit(t) <= 0 or (dark > 0.4 and Py.imod(s.seed_, 4) != 0):
+				continue
+			var ry := fy + (fy - s.y - s.h)
+			if ry > H:
+				continue
+			var key := "sign%d" % s.get_instance_id()
+			var r: Variant = _refl.get(key)
+			if r == null:
+				r = City.soft_reflection(s.emit)
+				_refl[key] = r
+			p.set_opacity(minf(1.0, 0.48 * k))
+			p.draw_image(Rect2(int(x), ry, s.w, s.h * 1.9), r)
+		p.set_opacity(1.0)
+		p.set_mode(OVER)
 	# Asphalt-Körnung noch einmal mit reduzierter Deckkraft darüber: die Reflexion
 	# sinkt in die Textur, die Straße bleibt als Straße lesbar (kein voller Spiegel).
 	p.set_opacity(0.42)
@@ -1411,7 +1447,8 @@ func _street(p: QP, e: QP, cam: float, t: float) -> void:
 		p.draw_polygon(PackedVector2Array([Vector2(x - 2, fy), Vector2(x + 2, fy),
 			Vector2(x + 10, fy + 120), Vector2(x - 10, fy + 120)]))
 	p.set_mode(OVER)
-	fx.draw_splashes(p, Scene.mix(city.th["fog"], DScene.PALE, 0.5))
+	if opt_fx:
+		fx.draw_splashes(p, Scene.mix(city.th["fog"], DScene.PALE, 0.5))
 # ------------------------------------------------------------------ Figuren
 func _rim_for(a: Variant, _cam: float) -> Array:
 	var best: Variant = null
@@ -1431,6 +1468,8 @@ func _rim_for(a: Variant, _cam: float) -> Array:
 ## Wet-Street-Reflexion (progressiv scharf->weich, city.soft_reflection).
 ## Einmal pro Sprite gerechnet und gecacht - Rendern kostet nur ein drawImage.
 func _mirror(im: QImg) -> QImg:
+	if not opt_reflections:
+		return null
 	var r: Variant = _refl.get(im)
 	if r == null:
 		if _refl.size() > 6000:
