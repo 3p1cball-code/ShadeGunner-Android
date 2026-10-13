@@ -8,7 +8,11 @@ extends RefCounted
 ## Partikel-Texturen (_soft) werden über FX.baker gebacken (fehlt er, z. B. in
 ## Headless-Tests, bleiben die Texturen leer, die Simulation läuft gleich).
 
-const W := Config.RENDER_W
+## Bildbreite zur Laufzeit (View.W: 640 ohne View.setup, sonst 480..960); Höhe fest.
+## Alle Verwendungen meinen die BILDSCHIRMBREITE (Mitte, Ränder, Kulling, Breitenschleifen,
+## Viewport-/Kachelgrößen); der Maßstab hängt an Persp.PPU_NEAR (Basisbreite 640).
+static var W: int:
+	get: return View.W
 const H := Config.RENDER_H
 
 static var baker: Baker
@@ -57,7 +61,8 @@ func _init(seed_: int = 0) -> void:
 # ------------------------------------------------------------------ Regen
 func set_rain(intensity_: float) -> void:
 	intensity = intensity_
-	var n := int(320 * intensity_) + 40
+	# Regendichte je Bildbreite: bei 640 genau int(320 * i) + 40 Tropfen
+	var n := Py.ifloordiv((int(320 * intensity_) + 40) * W, Config.RENDER_W)
 	rain = []
 	for _i in n:
 		var layer := rng.random()
@@ -81,7 +86,7 @@ func update_rain(dt: float, cam_dx: float) -> void:
 		elif float(r[0]) > W + 60:
 			r[0] = float(r[0]) - (W + 80)
 	# Spritzer auf dem Boden
-	var n := int(intensity * 160 * dt * 4)
+	var n := int(intensity * 160 * dt * 4 * (float(W) / Config.RENDER_W))
 	for _i in n:
 		var d := pow(rng.random(), 0.7)
 		var y := Persp.ground_y(d * 1.08 - 0.05)

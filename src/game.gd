@@ -74,6 +74,7 @@ func _ready() -> void:
 			if pr.size() == 2:
 				settings[pr[0]] = (pr[1] == "true") if pr[1] in ["true", "false"] else pr[1]
 	I18n.set_lang(str(settings.get("lang", "de")))
+	View.setup(str(settings.get("aspect", "auto")), View.target_size(settings, get_viewport().get_visible_rect().size))
 
 	# Alle Back-Ziele (Sprite-/Fahrzeug-Atlanten, Stadt-Ebenen, Reflexionen, Holos,
 	# Schrift) haengen in einem eigenen Viewport, der als ERSTER angelegt wird. Godot
