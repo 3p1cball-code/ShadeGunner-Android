@@ -138,46 +138,63 @@ func _ready() -> void:
 
 
 func _setup_input() -> void:
+	# k = Taste (logischer UND physischer Code - Android meldet D-Pad/Tasten oft nur
+	# logisch), j = Gamepad-Taste, a = Gamepad-Achse
 	var defs := {
-		"move_left": [[KEY_A], [KEY_LEFT], [JOY_BUTTON_DPAD_LEFT], [JOY_AXIS_LEFT_X, -1.0]],
-		"move_right": [[KEY_D], [KEY_RIGHT], [JOY_BUTTON_DPAD_RIGHT], [JOY_AXIS_LEFT_X, 1.0]],
-		"depth_far": [[KEY_W], [KEY_UP], [JOY_BUTTON_DPAD_UP], [JOY_AXIS_LEFT_Y, -1.0]],
-		"depth_near": [[KEY_S], [KEY_DOWN], [JOY_BUTTON_DPAD_DOWN], [JOY_AXIS_LEFT_Y, 1.0]],
-		"sprint": [[KEY_SHIFT], [JOY_AXIS_TRIGGER_LEFT, 0.5]],
-		"aim": [[KEY_E], [KEY_CTRL], [JOY_AXIS_TRIGGER_RIGHT, 0.4]],
-		"scan": [[KEY_R], [JOY_BUTTON_X]],
-		"jump": [[KEY_SPACE], [JOY_BUTTON_A]],
-		"cancel": [[KEY_C], [JOY_BUTTON_B]],
-		"shout": [[KEY_V], [JOY_BUTTON_Y]],
-		"confirm": [[KEY_ENTER], [KEY_KP_ENTER], [JOY_BUTTON_A]],
-		"pause": [[KEY_P], [KEY_ESCAPE], [JOY_BUTTON_START]],
-		"help": [[KEY_H], [KEY_F1], [JOY_BUTTON_BACK]],
-		"cycle_next": [[KEY_Q], [KEY_TAB], [JOY_BUTTON_RIGHT_SHOULDER]],
-		"cycle_prev": [[KEY_V], [JOY_BUTTON_LEFT_SHOULDER]],
-		"mute": [[KEY_M]],
-		"fullscreen": [[KEY_F]],
-		"up": [[KEY_UP], [KEY_W], [JOY_BUTTON_DPAD_UP]],
-		"down": [[KEY_DOWN], [JOY_BUTTON_DPAD_DOWN]],
+		"move_left": [["k", KEY_A], ["k", KEY_LEFT], ["j", JOY_BUTTON_DPAD_LEFT], ["a", JOY_AXIS_LEFT_X, -1.0]],
+		"move_right": [["k", KEY_D], ["k", KEY_RIGHT], ["j", JOY_BUTTON_DPAD_RIGHT], ["a", JOY_AXIS_LEFT_X, 1.0]],
+		"depth_far": [["k", KEY_W], ["k", KEY_UP], ["j", JOY_BUTTON_DPAD_UP], ["a", JOY_AXIS_LEFT_Y, -1.0]],
+		"depth_near": [["k", KEY_S], ["k", KEY_DOWN], ["j", JOY_BUTTON_DPAD_DOWN], ["a", JOY_AXIS_LEFT_Y, 1.0]],
+		"up": [["k", KEY_W], ["k", KEY_UP], ["j", JOY_BUTTON_DPAD_UP], ["a", JOY_AXIS_LEFT_Y, -1.0]],
+		"down": [["k", KEY_S], ["k", KEY_DOWN], ["j", JOY_BUTTON_DPAD_DOWN], ["a", JOY_AXIS_LEFT_Y, 1.0]],
+		"sprint": [["k", KEY_SHIFT], ["a", JOY_AXIS_TRIGGER_LEFT, 1.0]],
+		"aim": [["k", KEY_E], ["k", KEY_CTRL], ["a", JOY_AXIS_TRIGGER_RIGHT, 1.0]],
+		"scan": [["k", KEY_R], ["j", JOY_BUTTON_X]],
+		"jump": [["k", KEY_SPACE], ["j", JOY_BUTTON_A]],
+		"cancel": [["k", KEY_C], ["k", KEY_BACKSPACE], ["j", JOY_BUTTON_B]],
+		"shout": [["k", KEY_V], ["j", JOY_BUTTON_Y]],
+		"confirm": [["k", KEY_ENTER], ["k", KEY_KP_ENTER], ["j", JOY_BUTTON_A]],
+		"pause": [["k", KEY_P], ["k", KEY_ESCAPE], ["j", JOY_BUTTON_START]],
+		"help": [["k", KEY_H], ["k", KEY_F1], ["j", JOY_BUTTON_BACK]],
+		"cycle_next": [["k", KEY_TAB], ["k", KEY_Q], ["j", JOY_BUTTON_RIGHT_SHOULDER]],
+		"cycle_prev": [["j", JOY_BUTTON_LEFT_SHOULDER]],
+		"mute": [["k", KEY_M]],
+		"fullscreen": [["k", KEY_F]],
+		# Menue-Aktionen (Touch-Buttons, teils Tastatur)
+		"open_settings": [["k", KEY_O]],
+		"to_title": [["k", KEY_Q]],
+		"restart": [["k", KEY_R]],
 	}
-	for name in defs:
-		if not InputMap.has_action(name):
-			InputMap.add_action(name)
-			for ev in defs[name]:
-				match ev.size():
-					1:
-						var k := InputEventKey.new()
-						k.physical_keycode = ev[0]
-						InputMap.action_add_event(name, k)
-						var jb := InputEventJoypadButton.new()
-						jb.button_index = ev[0]
-						# nur wenn es eine Joypad-Taste ist, hinzufügen
-						if ev[0] >= JOY_BUTTON_A:
-							InputMap.action_add_event(name, jb)
-					2:
-						var jm := InputEventJoypadMotion.new()
-						jm.axis = ev[0]
-						jm.axis_value = ev[1]
-						InputMap.action_add_event(name, jm)
+	for name: String in defs:
+		if InputMap.has_action(name):
+			InputMap.erase_action(name)
+		InputMap.add_action(name, 0.45)
+		for ev: Array in defs[name]:
+			match String(ev[0]):
+				"k":
+					var k1 := InputEventKey.new()
+					k1.keycode = ev[1]
+					InputMap.action_add_event(name, k1)
+					var k2 := InputEventKey.new()
+					k2.physical_keycode = ev[1]
+					InputMap.action_add_event(name, k2)
+				"j":
+					var jb := InputEventJoypadButton.new()
+					jb.button_index = ev[1]
+					InputMap.action_add_event(name, jb)
+				"a":
+					var jm := InputEventJoypadMotion.new()
+					jm.axis = ev[1]
+					jm.axis_value = ev[2]
+					InputMap.action_add_event(name, jm)
+
+
+## Ereignis trifft eine der Aktionen (Tastatur-Wiederholung nur fuer Navigation).
+func _hit(e: InputEvent, names: Array, echo := false) -> bool:
+	for n: String in names:
+		if InputMap.has_action(n) and e.is_action_pressed(n, echo):
+			return true
+	return false
 
 
 func _parse_args() -> void:
@@ -290,7 +307,6 @@ func _process(delta: float) -> void:
 			if fade <= 0.0:
 				_trans = null
 
-	_handle_actions()
 	if _devtest:
 		_devtest_tick()
 	_after_states()
@@ -541,6 +557,8 @@ func _input(e: InputEvent) -> void:
 			pass
 		elif st.pressed:
 			_mouse_press(st.position, MOUSE_BUTTON_LEFT)
+	elif e.is_pressed():
+		_on_action(e)
 
 
 
@@ -569,82 +587,122 @@ func _mouse_press(pos: Vector2, button: int) -> void:
 		_choose(sel)
 
 
-## Aktionen einmal pro Frame auswerten (wie game.py: Tasten/Gamepad-Tasten).
-func _handle_actions() -> void:
-	if true:
-		if Input.is_action_just_pressed("mute"):
-			audio.toggle_mute()
-			return
-		if Input.is_action_just_pressed("fullscreen"):
-			settings["fullscreen"] = not DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
-			_apply_display()
-			Settings.save_(settings)
-			return
-		if Input.is_action_just_pressed("help"):
-			help = not help
-			audio.play("ui")
-			return
-		match mode:
-			"title":
-				if Input.is_action_just_pressed("confirm"):
-					audio.play("ui")
+## Diskrete Aktionen als Ereignisse (wie keyPressEvent im Original). Ereignisse statt
+## Abfrage pro Frame, damit kurze Tastendruecke (Android-D-Pad: Druecken und Loslassen
+## im selben Frame) nicht verloren gehen. Godots ui_*-Aktionen dienen als Rueckfall.
+const NAV_UP := ["up", "ui_up"]
+const NAV_DOWN := ["down", "ui_down"]
+const NAV_LEFT := ["move_left", "ui_left"]
+const NAV_RIGHT := ["move_right", "ui_right"]
+const NAV_OK := ["confirm", "ui_accept"]
+const NAV_BACK := ["pause", "cancel", "ui_cancel"]
+
+
+func _on_action(e: InputEvent) -> void:
+	if _hit(e, ["mute"]):
+		audio.toggle_mute()
+		return
+	if _hit(e, ["fullscreen"]):
+		settings["fullscreen"] = not DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
+		_apply_display()
+		Settings.save_(settings)
+		return
+	if _hit(e, ["help"]):
+		help = not help
+		audio.play("ui")
+		return
+	if help:
+		if _hit(e, NAV_BACK + NAV_OK):
+			help = false
+		return
+	match mode:
+		"title":
+			if _hit(e, NAV_OK) or _hit(e, ["jump"]):
+				audio.play("ui")
+				_transition(_start_run)
+			elif _hit(e, ["open_settings"]) or _hit(e, NAV_DOWN):
+				_open_settings("title")
+			elif _hit(e, ["pause"]):
+				get_tree().quit()
+		"intro":
+			if mode_t > 0.6 and (_hit(e, NAV_OK) or _hit(e, ["jump", "pause"])):
+				_set_mode("play")
+		"play":
+			if _hit(e, ["scan"]):
+				_edges["scan"] = true
+			elif _hit(e, ["jump"]):
+				_edges["jump"] = true
+			elif _hit(e, ["cancel"]):
+				_edges["cancel"] = true
+			elif _hit(e, ["cycle_next"]):
+				_edges["cycle"] = 1
+			elif _hit(e, ["cycle_prev"]):
+				_edges["cycle"] = -1
+			elif _hit(e, ["pause"]):
+				_set_mode("pause")
+				audio.play("ui")
+		"pause":
+			if _hit(e, ["to_title"]):
+				_transition(_title_world)
+			elif _hit(e, ["open_settings"]) or _hit(e, NAV_DOWN):
+				_open_settings("pause")
+			elif _hit(e, NAV_BACK) or _hit(e, NAV_OK):
+				_set_mode("play")
+		"settings":
+			if _hit(e, NAV_BACK):
+				_close_settings()
+			elif _hit(e, NAV_UP, true):
+				_settings_move(-1)
+			elif _hit(e, NAV_DOWN, true):
+				_settings_move(1)
+			elif _hit(e, NAV_LEFT, true):
+				_settings_adjust(-1)
+			elif _hit(e, NAV_RIGHT, true) or _hit(e, NAV_OK):
+				_settings_adjust(1)
+		"clear":
+			if _hit(e, NAV_LEFT, true):
+				sel = Py.imod(sel - 1, maxi(1, options.size()))
+				audio.play("target")
+			elif _hit(e, NAV_RIGHT, true):
+				sel = Py.imod(sel + 1, maxi(1, options.size()))
+				audio.play("target")
+			elif _hit(e, NAV_OK):
+				_choose(sel)
+		"over", "victory":
+			if mode_t > 1.0:
+				if _hit(e, ["restart", "scan"]):
 					_transition(_start_run)
-				elif Input.is_action_just_pressed("depth_near"):
-					_open_settings("title")
-				elif Input.is_action_just_pressed("pause"):
-					get_tree().quit()
-			"intro":
-				if mode_t > 0.6:
-					_set_mode("play")
-			"play":
-				if Input.is_action_just_pressed("scan"):
-					_edges["scan"] = true
-				elif Input.is_action_just_pressed("jump"):
-					_edges["jump"] = true
-				elif Input.is_action_just_pressed("cancel"):
-					_edges["cancel"] = true
-				elif Input.is_action_just_pressed("cycle_next"):
-					_edges["cycle"] = 1
-				elif Input.is_action_just_pressed("cycle_prev"):
-					_edges["cycle"] = -1
-				elif Input.is_action_just_pressed("pause"):
-					_set_mode("pause")
-					audio.play("ui")
-			"pause":
-				if Input.is_action_just_pressed("pause"):
-					_set_mode("play")
-				elif Input.is_action_just_pressed("depth_near"):
-					_open_settings("pause")
-			"settings":
-				if Input.is_action_just_pressed("pause") or Input.is_action_just_pressed("cancel"):
-					_set_mode(_settings_back)
-					Settings.save_(settings)
-					audio.play("ui")
-				elif Input.is_action_just_pressed("up"):
-					settings_sel = Py.imod(settings_sel - 1, _setting_keys().size())
-					audio.play("target")
-				elif Input.is_action_just_pressed("down"):
-					settings_sel = Py.imod(settings_sel + 1, _setting_keys().size())
-					audio.play("target")
-				elif Input.is_action_just_pressed("move_left"):
-					_settings_adjust(-1)
-				elif Input.is_action_just_pressed("move_right") or Input.is_action_just_pressed("confirm"):
-					_settings_adjust(1)
-			"clear":
-				if Input.is_action_just_pressed("move_left"):
-					sel = Py.imod(sel - 1, maxi(1, options.size()))
-					audio.play("target")
-				elif Input.is_action_just_pressed("move_right"):
-					sel = Py.imod(sel + 1, maxi(1, options.size()))
-					audio.play("target")
-				elif Input.is_action_just_pressed("confirm"):
-					_choose(sel)
-			"over", "victory":
-				if mode_t > 1.0:
-					if Input.is_action_just_pressed("scan"):
-						_transition(_start_run)
-					elif Input.is_action_just_pressed("confirm") or Input.is_action_just_pressed("pause"):
-						_transition(_title_world)
+				elif _hit(e, ["to_title"]) or _hit(e, NAV_OK) or _hit(e, NAV_BACK):
+					_transition(_title_world)
+
+
+func _settings_move(d: int) -> void:
+	settings_sel = Py.imod(settings_sel + d, _setting_keys().size())
+	audio.play("target")
+
+
+func _close_settings() -> void:
+	_set_mode(_settings_back)
+	Settings.save_(settings)
+	audio.play("ui")
+
+
+## Android-Zuruecktaste/-geste: wie "zurueck" im jeweiligen Zustand.
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
+		return
+	if help:
+		help = false
+	elif mode == "settings":
+		_close_settings()
+	elif mode == "play":
+		_set_mode("pause")
+	elif mode == "pause":
+		_set_mode("play")
+	elif mode == "title":
+		get_tree().quit()
+	elif mode in ["over", "victory"]:
+		_transition(_title_world)
 
 
 # ---------------------------------------------------------------- Einstellungen

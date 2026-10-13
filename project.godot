@@ -8,6 +8,8 @@ config_version=5
 
 [application]
 
+config/quit_on_go_back=false
+
 config/name="ShadeGunner"
 config/description="16-color cyberpunk side-scroller"
 run/main_scene="res://main.tscn"
