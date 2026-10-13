@@ -95,12 +95,22 @@ static func _make_setting_rows() -> Array:
 	return [
 		["music", "MUSIK", func(s: Dictionary) -> String: return Py.fmt("{:3d}%", [Py.round(float(s["music"]) * 100)]), "range"],
 		["sfx", "EFFEKTE", func(s: Dictionary) -> String: return Py.fmt("{:3d}%", [Py.round(float(s["sfx"]) * 100)]), "range"],
-		["fullscreen", "VOLLBILD", func(s: Dictionary) -> String: return "AN" if s["fullscreen"] else "AUS", "toggle"],
+		["quality", "QUALITÄT", func(s: Dictionary) -> String:
+			return String({"hoch": "HOCH", "mittel": "MITTEL", "niedrig": "NIEDRIG"}.get(s.get("quality", "mittel"), "MITTEL")), "cycle"],
+		["reflections", "REFLEXIONEN", func(s: Dictionary) -> String: return "AN" if s.get("reflections", true) else "AUS", "toggle"],
+		["rain", "REGEN", func(s: Dictionary) -> String: return String({"viel": "VIEL", "wenig": "WENIG", "aus": "AUS"}.get(s.get("rain", "viel"), "VIEL")), "cycle"],
+		["fog", "NEBEL", func(s: Dictionary) -> String: return "AN" if s.get("fog", true) else "AUS", "toggle"],
+		["fx", "FX", func(s: Dictionary) -> String: return "AN" if s.get("fx", true) else "AUS", "toggle"],
+		["aspect", "BILDFORMAT", func(s: Dictionary) -> String:
+			return String({"auto": "AUTO (VOLL)", "letterbox": "16:9 BALKEN", "16:9": "16:9", "20:9": "20:9", "4:3": "4:3"}.get(s.get("aspect", "auto"), "AUTO (VOLL)")), "cycle"],
+		["render_mode", "DARSTELLUNG", func(s: Dictionary) -> String: return "TEXT" if s.get("render_mode", "crt") == "text" else "CRT", "toggle"],
+		["touch", "TOUCH-STEUERUNG", func(s: Dictionary) -> String: return String({"auto": "AUTO", "an": "AN", "aus": "AUS"}.get(s.get("touch", "auto"), "AUTO")), "cycle"],
 		["resolution", "AUFLÖSUNG", func(s: Dictionary) -> String: return "%s x %s" % [_istr(s["resolution"][0]), _istr(s["resolution"][1])], "cycle"],
+		["fullscreen", "VOLLBILD", func(s: Dictionary) -> String: return "AN" if s["fullscreen"] else "AUS", "toggle"],
 		["scanlines", "SCANLINES", func(s: Dictionary) -> String: return "AN" if s["scanlines"] else "AUS", "toggle"],
-		["lang", "SPRACHE", func(s: Dictionary) -> String: return I18n.lang_name(String(s.get("lang", "de"))), "cycle"],
 		["difficulty", "SCHWIERIGKEIT", func(s: Dictionary) -> String:
 			return String((Config.DIFFICULTY.get(s.get("difficulty", "normal"), Config.DIFFICULTY["normal"]) as Dictionary)["label"]), "cycle"],
+		["lang", "SPRACHE", func(s: Dictionary) -> String: return I18n.lang_name(String(s.get("lang", "de"))), "cycle"],
 		["renderer", "RENDERER", func(s: Dictionary) -> String: return "GPU" if s.get("renderer") != "software" else "SOFTWARE", "toggle"],
 	]
 
@@ -790,20 +800,26 @@ func _settings(q: QP, ui: Dictionary) -> void:
 	var rowh := 42
 	var gap := 10
 	var x := Py.ifloordiv(HW - w, 2)
-	var y := 196
-	for i in SETTING_ROWS.size():
+	var y := 176
+	var maxrows := 9
+	var first := clampi(sel - maxrows / 2, 0, maxi(0, SETTING_ROWS.size() - maxrows))
+	if first > 0:
+		_t(q, Py.ifloordiv(HW, 2), y - 22, "▲ MEHR", SLATE, 2, "center")
+	for i in range(first, mini(first + maxrows, SETTING_ROWS.size())):
 		var row: Array = SETTING_ROWS[i]
 		var label: String = row[1]
 		var val: Callable = row[2]
 		var kind: String = row[3]
 		var on := i == sel
-		var y0 := y + i * (rowh + gap)
+		var y0 := y + (i - first) * (rowh + gap)
 		_box(q, x, y0, w, rowh, CYAN if on else INDIGO, [6, 8, 14], 225)
 		_t(q, x + 24, y0 + 13, label, WHITE if on else ASH, 3)
 		_t(q, x + w - 24, y0 + 13, String(val.call(s)), CYAN if on else PALE, 3, "right")
 		if kind == "range" and on:
 			_t(q, x + Py.ifloordiv(w, 2) + 60, y0 + 15, "←  →", AMBER, 2, "center")
-	var note := y + SETTING_ROWS.size() * (rowh + gap) + 8
+	if first + maxrows < SETTING_ROWS.size():
+		_t(q, Py.ifloordiv(HW, 2), y + maxrows * (rowh + gap) - 6, "▼ MEHR", SLATE, 2, "center")
+	var note := HH - 96
 	if s.get("renderer") == "software":
 		_t(q, Py.ifloordiv(HW, 2), note, "RENDERER WECHSELT MIT DEM NÄCHSTEN START", SLATE, 2, "center")
 		note += 22
