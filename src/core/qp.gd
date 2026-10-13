@@ -41,6 +41,7 @@ extends RefCounted
 
 enum { OVER, PLUS, SOURCE, CLEAR, DEST_IN }
 enum { CAP_FLAT, CAP_SQUARE, CAP_ROUND }
+enum { SEG_N, SEG_RAD, SEG_LIN }   # Segmentart (ersetzt den früheren String)
 
 static var _mat_premul: CanvasItemMaterial
 static var _mat_disabled: ShaderMaterial
@@ -57,9 +58,18 @@ var _used_groups := 0
 var _item := RID()
 var _item_key := -1
 var _ver := 0                 # steigt bei jeder segmentrelevanten Zustandsänderung
-var _item_xf := Transform2D()
+var _item_xf_gen := -1       # xf-Generation des Items (statt Transform-Vergleich)
 var _item_xf_valid := false
+var _item_thin := false        # Item-Transform steht gerade auf IDENTITY (dünner Strich/Punkt)
 var _draw_index := 0
+var _xf_gen := 0              # steigt bei jeder xf-Änderung
+# Zwischengespeicherte Ableitungen von xf (bei jeder xf-Änderung verworfen):
+var _gx_cached := Transform2D()
+var _gx_valid := false
+var _scale_cached := 1.0     # Maßstab sqrt(|det(xf)|), bei xf-Änderung neu berechnet
+var _pc_gen := 0               # steigt bei Änderung von pen_col/opacity/mode
+var _pen_pc := Color()
+var _pen_pc_gen := -1
 
 # Zustand
 var xf := Transform2D.IDENTITY
@@ -128,8 +138,11 @@ func begin(root: RID = RID()) -> void:
 	_draw_index = 0
 	_item = RID()
 	_item_key = -1
+	_item_xf_valid = false
+	_item_thin = false
 	_ver += 1
 	xf = Transform2D.IDENTITY
+	_invalidate_xf()
 	opacity = 1.0
 	pen_col = Color(0, 0, 0, 1)
 	pen_w = 1.0
@@ -141,6 +154,7 @@ func begin(root: RID = RID()) -> void:
 	clip_rect = null
 	clip_group = RID()
 	_stack.clear()
+	_pc_gen += 1
 
 
 ## Bild abschließen: übrige Pool-Items leeren (sie zeichnen dann nichts).
@@ -174,6 +188,7 @@ func restore() -> void:
 		return
 	var s: Array = _stack.pop_back()
 	xf = s[0]
+	_invalidate_xf()
 	opacity = s[1]
 	pen_col = s[2]
 	pen_w = s[3]
@@ -186,26 +201,32 @@ func restore() -> void:
 	clip_group = s[10]
 	tint = s[11]
 	_ver += 1
+	_pc_gen += 1
 
 
 func translate(dx: float, dy: float) -> void:
 	xf = xf.translated_local(Vector2(dx, dy))
+	_invalidate_xf()
 
 
 func scale(sx: float, sy: float) -> void:
 	xf = xf.scaled_local(Vector2(sx, sy))
+	_invalidate_xf()
 
 
 func rotate(deg: float) -> void:
 	xf = xf.rotated_local(deg_to_rad(deg))
+	_invalidate_xf()
 
 
 func reset_transform() -> void:
 	xf = Transform2D.IDENTITY
+	_invalidate_xf()
 
 
 func set_transform(t: Transform2D) -> void:
 	xf = t
+	_invalidate_xf()
 
 
 func transform() -> Transform2D:
@@ -214,12 +235,14 @@ func transform() -> Transform2D:
 
 func set_opacity(o: float) -> void:
 	opacity = clampf(o, 0.0, 1.0)
+	_pc_gen += 1
 
 
 func set_mode(m: int) -> void:
 	if m != mode:
 		mode = m
 		_ver += 1
+		_pc_gen += 1
 
 
 func set_smooth(on: bool) -> void:
@@ -233,6 +256,7 @@ func set_pen(col: Color, width: float = 1.0, cap: int = CAP_SQUARE) -> void:
 	pen_col = col
 	pen_w = width
 	pen_cap = cap
+	_pc_gen += 1
 
 
 func set_pen_width(width: float) -> void:
@@ -305,22 +329,42 @@ func _new_group() -> RID:
 	RenderingServer.canvas_item_set_canvas_group_mode(g, RenderingServer.CANVAS_GROUP_MODE_CLIP_ONLY, 0.0, true, 0.0, false)
 	_item = RID()
 	_item_key = -1
+	_item_thin = false
 	return g
 
 
 ## Transform für Formen: +0.5 px im Zielraum, weil Qt aliased an den Pixelecken abtastet.
 func _gx() -> Transform2D:
-	return Transform2D(xf.x, xf.y, xf.origin + Vector2(0.5, 0.5))
+	if not _gx_valid:
+		_gx_cached = Transform2D(xf.x, xf.y, xf.origin + Vector2(0.5, 0.5))
+		_gx_valid = true
+	return _gx_cached
 
 
-func _seg(kind: String) -> RID:
-	# kind: "" (normal), "rad" (radialer Verlauf), "lin" (linearer Verlauf/Textur)
-	var key := _ver * 2 + (1 if kind == "rad" else 0)
+## xf hat sich geändert -> gecachte Ableitungen (gx, Maßstab) verwerfen.
+func _invalidate_xf() -> void:
+	_gx_valid = false
+	_scale_cached = sqrt(absf(xf.determinant()))
+	_xf_gen += 1
+
+
+func _seg(kind: int, thin: bool = false) -> RID:
+	# kind: SEG_N (normal), SEG_RAD (radialer Verlauf), SEG_LIN (linearer Verlauf/Textur)
+	# thin: dünner Strich/Punkt -> Item-Transform IDENTITY (Pixelmitten), sonst gx.
+	var key := _ver * 2 + (1 if kind == SEG_RAD else 0)
 	if _item.is_valid() and key == _item_key:
-		if not _item_xf_valid or _item_xf != xf:
+		if not _item_xf_valid or _item_xf_gen != _xf_gen:
 			RenderingServer.canvas_item_add_set_transform(_item, _gx())
-			_item_xf = xf
+			_item_xf_gen = _xf_gen
 			_item_xf_valid = true
+			_item_thin = false
+		if thin:
+			if not _item_thin:
+				RenderingServer.canvas_item_add_set_transform(_item, Transform2D.IDENTITY)
+				_item_thin = true
+		elif _item_thin:
+			RenderingServer.canvas_item_add_set_transform(_item, _gx())
+			_item_thin = false
 		return _item
 	var it: RID
 	if _used < _pool.size():
@@ -343,9 +387,9 @@ func _seg(kind: String) -> RID:
 		SOURCE, CLEAR:
 			mat = _mat_disabled
 		DEST_IN:
-			mat = _mat_destin_rad if kind == "rad" else _mat_destin
+			mat = _mat_destin_rad if kind == SEG_RAD else _mat_destin
 		_:
-			if kind == "rad":
+			if kind == SEG_RAD:
 				mat = _mat_radial
 	RenderingServer.canvas_item_set_material(it, mat.get_rid())
 	if clip_rect != null:
@@ -357,8 +401,12 @@ func _seg(kind: String) -> RID:
 	RenderingServer.canvas_item_add_set_transform(it, _gx())
 	_item = it
 	_item_key = key
-	_item_xf = xf
+	_item_xf_gen = _xf_gen
 	_item_xf_valid = true
+	_item_thin = false
+	if thin:
+		RenderingServer.canvas_item_add_set_transform(it, Transform2D.IDENTITY)
+		_item_thin = true
 	return it
 
 
@@ -377,6 +425,16 @@ func _pc(col: Color) -> Color:
 			return Color(a, a, a, a)
 		_:
 			return Color(col.r * a, col.g * a, col.b * a, a)
+
+
+## Stiftfarbe für das Blending, gecacht solange pen_col/opacity/mode unverändert.
+func _pen_col_pc() -> Color:
+	if tint != null:
+		return _pc(pen_col)
+	if _pen_pc_gen != _pc_gen:
+		_pen_pc = _pc(pen_col)
+		_pen_pc_gen = _pc_gen
+	return _pen_pc
 
 
 ## Modulation für (premultiplizierte) Texturen.
@@ -400,7 +458,7 @@ func _aabb(pts: Array) -> Rect2:
 
 
 func _scale_px() -> float:
-	return sqrt(absf(xf.determinant()))
+	return _scale_cached
 
 
 # ------------------------------------------------------------------ Füllungen
@@ -409,13 +467,13 @@ func _fill_poly(pts: PackedVector2Array, fill: Variant) -> void:
 		return
 	if fill is QGrad:
 		var g: QGrad = fill
-		var it := _seg("rad" if g.kind == QGrad.RADIAL else "lin")
+		var it := _seg(SEG_RAD if g.kind == QGrad.RADIAL else SEG_LIN)
 		var uvs := PackedVector2Array()
 		for p in pts:
 			uvs.append(g.uv_at(p))
 		_add_polygon_safe(it, pts, PackedColorArray([_tm()]), uvs, g.texture().get_rid())
 	else:
-		var it := _seg("")
+		var it := _seg(SEG_N)
 		_add_polygon_safe(it, pts, PackedColorArray([_pc(fill)]), PackedVector2Array())
 
 
@@ -445,7 +503,7 @@ func fill_rect(x: float, y: float, w: float, h: float, fill: Variant) -> void:
 	if fill is QGrad:
 		_fill_poly(PackedVector2Array([Vector2(x, y), Vector2(x + w, y), Vector2(x + w, y + h), Vector2(x, y + h)]), fill)
 		return
-	var it := _seg("")
+	var it := _seg(SEG_N)
 	RenderingServer.canvas_item_add_rect(it, Rect2(x, y, w, h).abs(), _pc(fill))
 
 
@@ -453,22 +511,21 @@ func fill_rect(x: float, y: float, w: float, h: float, fill: Variant) -> void:
 func _stroke(a: Vector2, b: Vector2) -> void:
 	if not pen_on:
 		return
-	var it := _seg("")
-	var col := _pc(pen_col)
-	var spx := pen_w * _scale_px()
+	var col := _pen_pc if (tint == null and _pen_pc_gen == _pc_gen) else _pen_col_pc()
+	var spx := pen_w * _scale_cached
 	if pen_w <= 0.0 or spx <= 1.0:
 		# Kosmetischer 1-px-Strich auf den Pixelmitten (Qt Aliased): im Zielraum zeichnen
+		var it := _seg(SEG_N, true)
 		var ta := xf * a
 		var tb := xf * b
-		RenderingServer.canvas_item_add_set_transform(it, Transform2D.IDENTITY)
 		var o := Vector2(0.5, 0.5)
 		if ta.is_equal_approx(tb):
 			RenderingServer.canvas_item_add_rect(it, Rect2(ta.floor(), Vector2.ONE), col)
 		else:
 			RenderingServer.canvas_item_add_line(it, ta.floor() + o, tb.floor() + o, col, -1.0, false)
 			RenderingServer.canvas_item_add_rect(it, Rect2(tb.floor(), Vector2.ONE), col)
-		RenderingServer.canvas_item_add_set_transform(it, _gx())
 		return
+	var it := _seg(SEG_N)
 	var d := b - a
 	var l := d.length()
 	var hw := pen_w * 0.5
@@ -489,7 +546,7 @@ func _stroke(a: Vector2, b: Vector2) -> void:
 
 func _dot_shape(it: RID, p: Vector2, r: float, col: Color) -> void:
 	if pen_cap == CAP_ROUND:
-		var n := clampi(int(r * _scale_px() * 3.0), 8, 32)
+		var n := clampi(int(r * _scale_cached * 3.0), 8, 32)
 		var pts := PackedVector2Array()
 		for i in n:
 			var a := TAU * i / n
@@ -521,15 +578,14 @@ func draw_polyline(pts: PackedVector2Array) -> void:
 func draw_point(x: float, y: float) -> void:
 	if not pen_on:
 		return
-	var it := _seg("")
-	var col := _pc(pen_col)
-	var spx := pen_w * _scale_px()
+	var col := _pen_pc if (tint == null and _pen_pc_gen == _pc_gen) else _pen_col_pc()
+	var spx := pen_w * _scale_cached
 	if pen_w <= 0.0 or spx <= 1.0:
 		var tp := (xf * Vector2(x, y)).floor()
-		RenderingServer.canvas_item_add_set_transform(it, Transform2D.IDENTITY)
+		var it := _seg(SEG_N, true)
 		RenderingServer.canvas_item_add_rect(it, Rect2(tp, Vector2.ONE), col)
-		RenderingServer.canvas_item_add_set_transform(it, _gx())
 		return
+	var it := _seg(SEG_N)
 	_dot_shape(it, Vector2(x, y), pen_w * 0.5, col)
 
 
@@ -558,7 +614,7 @@ func _ellipse_pts(x: float, y: float, w: float, h: float, a0: float = 0.0, span:
 	var cy := y + h * 0.5
 	var rx := absf(w) * 0.5
 	var ry := absf(h) * 0.5
-	var per := (rx + ry) * PI * _scale_px()
+	var per := (rx + ry) * PI * _scale_cached
 	var n := clampi(int(per / 2.0), 10, 96)
 	var full := absf(span - TAU) < 0.0001
 	var pts := PackedVector2Array()
@@ -612,7 +668,7 @@ func draw_image(dst: Rect2, img: QImg, src: Rect2 = Rect2()) -> void:
 		return
 	var s := src if src.size != Vector2.ZERO else Rect2(Vector2.ZERO, img.region.size)
 	var sr := Rect2(img.region.position + s.position, s.size)
-	var it := _seg("")
+	var it := _seg(SEG_N)
 	var t := xf
 	if img.mirrored:
 		# gespiegelt: Quelle von rechts lesen, Ziel über einen Spiegel-Transform
@@ -622,6 +678,7 @@ func draw_image(dst: Rect2, img: QImg, src: Rect2 = Rect2()) -> void:
 	RenderingServer.canvas_item_add_set_transform(it, t)
 	RenderingServer.canvas_item_add_texture_rect_region(it, dst, img.tex.get_rid(), sr, _tm(), false, true)
 	RenderingServer.canvas_item_add_set_transform(it, _gx())
+	_item_thin = false
 
 
 func draw_image_at(x: float, y: float, img: QImg) -> void:
@@ -635,7 +692,8 @@ func draw_texture(dst: Rect2, tex: Texture2D, src: Rect2 = Rect2()) -> void:
 	if tex == null:
 		return
 	var s := src if src.size != Vector2.ZERO else Rect2(Vector2.ZERO, tex.get_size())
-	var it := _seg("")
+	var it := _seg(SEG_N)
 	RenderingServer.canvas_item_add_set_transform(it, xf)
 	RenderingServer.canvas_item_add_texture_rect_region(it, dst, tex.get_rid(), s, _tm(), false, true)
 	RenderingServer.canvas_item_add_set_transform(it, _gx())
+	_item_thin = false
