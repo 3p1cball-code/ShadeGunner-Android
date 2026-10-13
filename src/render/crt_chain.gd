@@ -26,6 +26,7 @@ var hud_tex: Texture2D
 var vc := 640
 var vr := 360
 var scan_on := true
+var aspect_mode := "auto"      # "auto" = fuellt den Bildschirm (beschneidet), sonst 16:9-Balken
 var force_dt := -1.0          # Tools: feste Frame-Zeit statt Wanduhr
 var level: Dictionary = DShaders.CRT_LEVEL
 
@@ -106,7 +107,9 @@ func _process(_delta: float) -> void:
 	var dpr := 1.0
 	var lvl := level
 
-	var cell := minf(float(fw) / vc, float(fh) / vr)
+	# auto: Bildschirm fuellen (oben/unten bzw. seitlich beschneiden, keine Balken)
+	# letterbox: ganze Szene sichtbar (16:9 mit Balken)
+	var cell := maxf(float(fw) / vc, float(fh) / vr) if aspect_mode == "auto" else minf(float(fw) / vc, float(fh) / vr)
 	var pw := vc * cell
 	var ph := vr * cell
 	var ox := (fw - pw) / 2.0
@@ -228,7 +231,7 @@ func _process(_delta: float) -> void:
 ## Fensterpixel -> Szenenpixel inkl. CRT-Wölbung (wie game.py _scene_pos). null = außerhalb.
 func scene_pos(pos: Vector2) -> Variant:
 	var win := get_viewport().get_visible_rect().size
-	var cell := minf(win.x / vc, win.y / vr)
+	var cell := maxf(win.x / vc, win.y / vr) if aspect_mode == "auto" else minf(win.x / vc, win.y / vr)
 	var pw := vc * cell
 	var ph := vr * cell
 	var ox := (win.x - pw) / 2.0

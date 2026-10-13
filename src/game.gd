@@ -15,6 +15,10 @@ var scene: Scene
 var hud: HUD
 var audio: Audio
 var chain: CRTChain
+var touch: TouchControls
+var textmode: TextMode
+var base_scene_tex: Texture2D
+var text_scene_tex: Texture2D
 
 var world: World
 var best: Dictionary = {"score": 0, "rank": "D", "runs": 0}
@@ -47,6 +51,7 @@ var _shot_at_mode := ""
 var _frame := 0
 var _tickn := 0
 var _autoplay := false
+var _set_over := ""
 var _devtest := false
 var _show_fps := false
 var _nocr := false
@@ -59,6 +64,11 @@ func _ready() -> void:
 	_setup_input()
 	best = Save.load_()
 	settings = Settings.load_()
+	if _set_over != "":
+		for kv in _set_over.split(","):
+			var pr := kv.split(":")
+			if pr.size() == 2:
+				settings[pr[0]] = (pr[1] == "true") if pr[1] in ["true", "false"] else pr[1]
 	I18n.set_lang(str(settings.get("lang", "de")))
 
 	baker = Baker.new()
@@ -71,6 +81,14 @@ func _ready() -> void:
 
 	scene = Scene.new()
 	var stex: Texture2D = scene.setup(self, baker)
+
+	var stex_base: Texture2D = stex
+	base_scene_tex = stex_base
+	textmode = TextMode.new()
+	text_scene_tex = textmode.setup(self, stex_base)
+	textmode.set_cell_size(8)
+	textmode.set_charset("ascii")
+	textmode.set_enabled(false)
 
 	hud = HUD.new()
 	var htex: Texture2D = hud.setup(self)
@@ -89,12 +107,16 @@ func _ready() -> void:
 		chain.scan_on = bool(settings.get("scanlines", true))
 		add_child(chain)
 
+	touch = TouchControls.new()
+	touch.setup(self, settings)
+
 	audio = Audio.new()
 	add_child(audio)
 	audio.set_volumes(settings.get("music", 0.7), settings.get("sfx", 1.0))
 
 	_title_world()
 	_apply_display()
+	_apply_settings()
 	if _autoplay or _shot_path != "":
 		_start_run()
 		_set_mode("play" if _autoplay else _shot_at_mode if _shot_at_mode != "" else "play")
@@ -157,6 +179,8 @@ func _parse_args() -> void:
 				DisplayServer.window_set_size(Vector2i(int(wh[0]), int(wh[1])))
 		elif a == "--auto":
 			_autoplay = true
+		elif a.begins_with("--set="):
+			_set_over = a.substr(6)
 		elif a == "--nocr":
 			_nocr = true
 		elif a == "--fps":
@@ -415,6 +439,8 @@ func _hud_ui() -> Dictionary:
 
 # ---------------------------------------------------------------- Eingabe
 func _input(e: InputEvent) -> void:
+	if e is InputEventMouseButton and (e as InputEventMouseButton).pressed and touch != null and touch.is_over_controls((e as InputEventMouseButton).position):
+		return
 	if e is InputEventMouseMotion:
 		var sp: Variant = _scene_pos((e as InputEventMouseMotion).position)
 		if sp != mouse_scene:
@@ -432,7 +458,9 @@ func _input(e: InputEvent) -> void:
 				mouse_mid = false
 	elif e is InputEventScreenTouch:
 		var st := e as InputEventScreenTouch
-		if st.pressed:
+		if touch != null and touch.is_over_controls(st.position):
+			pass
+		elif st.pressed:
 			_mouse_press(st.position, MOUSE_BUTTON_LEFT)
 
 
@@ -509,7 +537,7 @@ func _handle_actions() -> void:
 				elif Input.is_action_just_pressed("depth_near"):
 					_open_settings("pause")
 			"settings":
-				if Input.is_action_just_pressed("pause") or Input.is_action_just_pressed("depth_near"):
+				if Input.is_action_just_pressed("pause") or Input.is_action_just_pressed("cancel"):
 					_set_mode(_settings_back)
 					Settings.save_(settings)
 					audio.play("ui")
@@ -564,35 +592,100 @@ func _settings_adjust(d: int) -> void:
 		"sfx":
 			settings["sfx"] = clampf(float(settings.get("sfx", 1.0)) + 0.1 * d, 0.0, 1.0)
 			audio.set_volumes(null, settings["sfx"])
-		"fullscreen":
-			settings["fullscreen"] = not bool(settings.get("fullscreen", false))
-			_apply_display()
-		"resolution":
-			var res: Array = Config.RESOLUTIONS
-			var i := 0
-			for j in res.size():
-				if res[j] == settings.get("resolution", [1280, 720]):
-					i = j
-			i = Py.imod(i + (1 if d > 0 else -1), res.size())
-			settings["resolution"] = res[i]
-			_apply_display()
-		"scanlines":
-			settings["scanlines"] = not bool(settings.get("scanlines", true))
-			chain.scan_on = settings["scanlines"]
-		"difficulty":
-			var order: Array = Config.DIFFICULTY_ORDER
-			var cur := str(settings.get("difficulty", "normal"))
-			var i := order.find(cur)
+		"quality":
+			var order := ["hoch", "mittel", "niedrig"]
+			var i := order.find(str(settings.get("quality", "mittel")))
 			if i < 0:
 				i = 1
-			settings["difficulty"] = order[Py.imod(i + (1 if d > 0 else -1), order.size())]
+			settings["quality"] = order[Py.imod(i + (1 if d > 0 else -1), order.size())]
+			_apply_quality(settings["quality"])
+		"reflections":
+			settings["reflections"] = not bool(settings.get("reflections", true))
+		"rain":
+			var ro := ["viel", "wenig", "aus"]
+			var ri := ro.find(str(settings.get("rain", "viel")))
+			if ri < 0:
+				ri = 0
+			settings["rain"] = ro[Py.imod(ri + (1 if d > 0 else -1), ro.size())]
+		"fog":
+			settings["fog"] = not bool(settings.get("fog", true))
+		"fx":
+			settings["fx"] = not bool(settings.get("fx", true))
+		"aspect":
+			settings["aspect"] = "letterbox" if settings.get("aspect", "auto") == "auto" else "auto"
+		"render_mode":
+			settings["render_mode"] = "crt" if settings.get("render_mode", "crt") == "text" else "text"
+		"touch":
+			var to := ["auto", "an", "aus"]
+			var ti := to.find(str(settings.get("touch", "auto")))
+			if ti < 0:
+				ti = 0
+			settings["touch"] = to[Py.imod(ti + (1 if d > 0 else -1), to.size())]
+		"fullscreen":
+			settings["fullscreen"] = not bool(settings.get("fullscreen", false))
+		"resolution":
+			var res: Array = Config.RESOLUTIONS
+			var ri2 := 0
+			for j in res.size():
+				if res[j] == settings.get("resolution", [1280, 720]):
+					ri2 = j
+			ri2 = Py.imod(ri2 + (1 if d > 0 else -1), res.size())
+			settings["resolution"] = res[ri2]
+		"scanlines":
+			settings["scanlines"] = not bool(settings.get("scanlines", true))
+		"difficulty":
+			var order2: Array = Config.DIFFICULTY_ORDER
+			var cur := str(settings.get("difficulty", "normal"))
+			var di := order2.find(cur)
+			if di < 0:
+				di = 1
+			settings["difficulty"] = order2[Py.imod(di + (1 if d > 0 else -1), order2.size())]
 		"lang":
 			settings["lang"] = "en" if settings.get("lang") != "en" else "de"
 			I18n.set_lang(settings["lang"])
 		"renderer":
 			settings["renderer"] = "software" if settings.get("renderer") != "software" else "auto"
+	_apply_settings()
+	_apply_display()
 	Settings.save_(settings)
 	audio.play("target")
+
+
+## Qualitaetsstufe setzt die Einzeloptionen.
+func _apply_quality(q: String) -> void:
+	match q:
+		"hoch":
+			settings["reflections"] = true
+			settings["rain"] = "viel"
+			settings["fog"] = true
+			settings["fx"] = true
+		"mittel":
+			settings["reflections"] = false
+			settings["rain"] = "viel"
+			settings["fog"] = true
+			settings["fx"] = true
+		_:
+			settings["reflections"] = false
+			settings["rain"] = "aus"
+			settings["fog"] = false
+			settings["fx"] = false
+
+
+## Alle Darstellungs-/Leistungsoptionen an Szene, CRT, Textmodus und Touch weitergeben.
+func _apply_settings() -> void:
+	scene.opt_reflections = bool(settings.get("reflections", true))
+	scene.opt_rain = str(settings.get("rain", "viel"))
+	scene.opt_fog = bool(settings.get("fog", true))
+	scene.opt_fx = bool(settings.get("fx", true))
+	scene.opt_quality = str(settings.get("quality", "mittel"))
+	chain.aspect_mode = "auto" if str(settings.get("aspect", "auto")) == "auto" else "letterbox"
+	chain.scan_on = bool(settings.get("scanlines", true))
+	var want_text := str(settings.get("render_mode", "crt")) == "text"
+	if textmode != null:
+		textmode.set_enabled(want_text)
+		chain.scene_tex = text_scene_tex if want_text else base_scene_tex
+	if touch != null:
+		touch.refresh_visibility(settings)
 
 
 func _apply_display() -> void:

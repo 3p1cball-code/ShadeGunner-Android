@@ -102,7 +102,7 @@ static func _make_setting_rows() -> Array:
 		["fog", "NEBEL", func(s: Dictionary) -> String: return "AN" if s.get("fog", true) else "AUS", "toggle"],
 		["fx", "FX", func(s: Dictionary) -> String: return "AN" if s.get("fx", true) else "AUS", "toggle"],
 		["aspect", "BILDFORMAT", func(s: Dictionary) -> String:
-			return String({"auto": "AUTO (VOLL)", "letterbox": "16:9 BALKEN", "16:9": "16:9", "20:9": "20:9", "4:3": "4:3"}.get(s.get("aspect", "auto"), "AUTO (VOLL)")), "cycle"],
+			return "VOLL (AUTO)" if s.get("aspect", "auto") == "auto" else "16:9 BALKEN", "toggle"],
 		["render_mode", "DARSTELLUNG", func(s: Dictionary) -> String: return "TEXT" if s.get("render_mode", "crt") == "text" else "CRT", "toggle"],
 		["touch", "TOUCH-STEUERUNG", func(s: Dictionary) -> String: return String({"auto": "AUTO", "an": "AN", "aus": "AUS"}.get(s.get("touch", "auto"), "AUTO")), "cycle"],
 		["resolution", "AUFLÖSUNG", func(s: Dictionary) -> String: return "%s x %s" % [_istr(s["resolution"][0]), _istr(s["resolution"][1])], "cycle"],
