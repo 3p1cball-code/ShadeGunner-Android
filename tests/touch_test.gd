@@ -48,45 +48,41 @@ func _ready() -> void:
 
 
 func _checks() -> void:
-	# Stick: rechts -> move_right, unten -> depth_near + down
-	_stick(tc.stick_center() + Vector2(400.0, 0.0), ["move_right"])
-	_stick(tc.stick_center() + Vector2(0.0, 400.0), ["depth_near", "down"])
-	_stick(tc.stick_center() + Vector2(-400.0, -400.0), ["move_left", "depth_far", "up"])
-	# Stickmitte: kein Druck
+	# Ereignisse werden gepuffert eingespeist -> Prüfung über den Mitschnitt
+	tc.set_mode("play")
+	tc.record = true
+	_stick(Vector2(400.0, 0.0), ["move_right"])
+	_stick(Vector2(0.0, 400.0), ["depth_near"])
+	_stick(Vector2(-400.0, -400.0), ["move_left", "depth_far"])
+	tc.event_log.clear()
 	tc.debug_touch(tc.stick_center(), true)
-	_check("stick neutral", not Input.is_action_pressed("move_right") and not Input.is_action_pressed("move_left"))
+	_check("stick neutral", tc.event_log.is_empty())
 	tc.debug_touch(tc.stick_center(), false)
-	# Buttons (ZIELEN gibt zugleich confirm frei)
-	var cases: Array = [
-		["aim", "aim"], ["aim", "confirm"], ["scan", "scan"], ["jump", "jump"],
-		["shout", "shout"], ["cancel", "cancel"], ["pause", "pause"],
-	]
-	for c: Array in cases:
-		var id := String(c[0])
-		var act := String(c[1])
+	for id: String in ["aim", "scan", "jump", "shout", "cancel", "pause"]:
+		tc.event_log.clear()
 		tc.debug_touch(tc.button_center(id), true)
-		_check("button %s -> %s" % [id, act], Input.is_action_pressed(act))
 		tc.debug_touch(tc.button_center(id), false)
-		_check("release %s -> %s" % [id, act], not Input.is_action_pressed(act))
-	# Sichtbarkeit: "aus" blendet aus und löst alles
+		_check("button %s" % id, tc.event_log == [[id, true], [id, false]])
 	tc.set_enabled("aus")
 	_check("aus unsichtbar", not tc.is_active())
 	tc.set_enabled("an")
+	tc.record = false
 	print("touch_test Aktionen: ", "OK" if bad == 0 else "%d FEHLER" % bad)
 
 
-func _stick(pos: Vector2, acts: Array) -> void:
+func _stick(off: Vector2, acts: Array) -> void:
+	tc.event_log.clear()
 	tc.debug_touch(tc.stick_center(), true)
-	tc.debug_drag(pos)
+	tc.debug_drag(tc.stick_center() + off)
 	for a: String in acts:
-		_check("stick -> %s" % a, Input.is_action_pressed(a))
-	tc.debug_touch(pos, false)
+		_check("stick -> %s" % a, tc.event_log.has([a, true]))
+	tc.debug_touch(tc.stick_center() + off, false)
 
 
-func _check(name: String, ok: bool) -> void:
+func _check(what: String, ok: bool) -> void:
 	if not ok:
 		bad += 1
-		print("FAIL ", name)
+		print("FAIL ", what)
 
 
 func _process(_dt: float) -> void:
