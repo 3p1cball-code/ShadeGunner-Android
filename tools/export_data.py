@@ -33,6 +33,7 @@ MODULES = [
     ("shadegunner.render.scene", "DScene", "data/d_scene.gd"),
     ("shadegunner.render.city", "DCity", "data/d_city.gd"),
     ("shadegunner.render.vehicles", "DVehicles", "data/d_vehicles.gd"),
+    ("shadegunner.render.props", "DProps", "data/d_props.gd"),
     ("shadegunner.render.holo", "DHolo", "data/d_holo.gd"),
     ("shadegunner.render.sprites", "DSprites", "data/d_sprites.gd"),
     ("shadegunner.render.pixfont", "DPixfont", "data/d_pixfont.gd"),
@@ -40,7 +41,7 @@ MODULES = [
 ]
 
 # Diese Namen sind Code/Laufzeitobjekte, keine Daten
-SKIP = {"PLUS", "OVER", "ASCII_VERT", "BAYER_FRAG", "CRT_PERSIST_FRAG", "CRT_FOCUS_FRAG",
+SKIP = {"ACTIVE", "PLUS", "OVER", "ASCII_VERT", "BAYER_FRAG", "CRT_PERSIST_FRAG", "CRT_FOCUS_FRAG",
         "CRT_BLUR_FRAG", "CRT_FRAG", "K"}
 
 

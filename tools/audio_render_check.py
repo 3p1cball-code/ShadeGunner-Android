@@ -152,8 +152,8 @@ def main():
     print(f"pulse x2: Rest {e:.1f} dB (2. Stimme 1 Sample versetzt ergäbe {e1:.1f} dB)")
     ok &= e < e1 - 6
 
-    # 4) Laut: Donner + Spinner bei vol 1 -> Sättigung des Limiters
-    th, sp = ogg("thunder"), ogg("spinner_lr")
+    # 4) Laut: Stromausfall + Spinner bei vol 1 -> Sättigung des Limiters
+    th, sp = ogg("blackout"), ogg("spinner_lr")
     mix = np.zeros((max(len(th), len(sp)), 2))
     mix[:len(th)] += th
     mix[:len(sp)] += sp

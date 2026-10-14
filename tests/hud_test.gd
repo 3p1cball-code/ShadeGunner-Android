@@ -220,12 +220,11 @@ func _job_fx() -> void:
 			f.impact(240.0, 0.6, -20.0, [255, 220, 160], 6, false)
 		f.update_steam(dt)
 		f.update_combat(dt)
-		var bolt := f.update_weather(dt * 9, 0.8)
 		var sh := f.shake()
-		log_.append([bolt, sh, f.trauma, f.lightning])
+		log_.append([sh, f.trauma])
 	var ref: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://tests/fx_ref.json"))
 	var got := {"rain": f.rain, "splashes": f.splashes, "steam": f.steam, "sparks": f.sparks, "flashes": f.flashes,
-		"tracers": f.tracers, "bolt": f.bolt, "log": log_, "next_bolt": f._next_bolt, "rnd": f.rng.random()}
+		"tracers": f.tracers, "log": log_, "rnd": f.rng.random()}
 	var res := [0.0, 0, 0]       # max. Abweichung, verglichene Zahlen, Strukturfehler
 	for k: String in got:
 		_cmp(got[k], ref[k], res, k)

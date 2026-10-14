@@ -22,24 +22,8 @@ uniform float u_gain = 1.0;      // Helligkeitsverstaerkung vor der Gamma-Kurve
 uniform float u_gamma = 0.7;     // < 1 hebt dunkle Bereiche an (Nacht-Szene)
 uniform int u_enabled = 1;
 
-// noir16 - identisch zu src/config.gd / chain/bayer.gdshader
-const vec3 PAL[16] = vec3[16](
-	vec3(0.0235, 0.0314, 0.0549),
-	vec3(0.0706, 0.0863, 0.1490),
-	vec3(0.1333, 0.1569, 0.2588),
-	vec3(0.2039, 0.2353, 0.3765),
-	vec3(0.2902, 0.3608, 0.5412),
-	vec3(0.4078, 0.5176, 0.6980),
-	vec3(0.5412, 0.1255, 0.2196),
-	vec3(0.6118, 0.3294, 0.1569),
-	vec3(0.6353, 0.6588, 0.7059),
-	vec3(0.8392, 0.8627, 0.8863),
-	vec3(1.0000, 1.0000, 1.0000),
-	vec3(0.1333, 0.3765, 0.4078),
-	vec3(0.2510, 0.8235, 0.8627),
-	vec3(0.8784, 0.2824, 0.5882),
-	vec3(1.0000, 0.5412, 0.1725),
-	vec3(0.4784, 0.2902, 0.6588));
+// aktive Zonenpalette (Palette.v3(), wie chain/bayer.gdshader)
+uniform vec3 PAL[16];
 
 vec3 nearest_pal(vec3 c) {
 	vec3 best = PAL[0];

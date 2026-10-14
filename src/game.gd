@@ -52,6 +52,9 @@ var _frame := 0
 var _tickn := 0
 var _autoplay := false
 var _set_over := ""
+var _start_zone := -1         # Werkzeuge: --zone=N startet direkt in Sektor N+1
+var _start_x := -1.0          # Werkzeuge: --x=X setzt den Spieler auf x
+var _seed_over := -1          # Werkzeuge: --seed=N fester Seed des Einsatzes
 var _flick := false
 var _flick_imgs: Array = []
 var _flick_boxes: Array = []
@@ -133,8 +136,14 @@ func _ready() -> void:
 	_title_world()
 	_apply_display()
 	_apply_settings()
-	if _autoplay or _shot_path != "":
+	if _autoplay or (_shot_path != "" and _shot_at_mode != "title"):
 		_start_run()
+		if _start_zone >= 0:
+			world = World.new(world.run, world.seed, _start_zone)
+			scene.ensure_zone(_start_zone, world.seed, world.length)
+		if _start_x >= 0.0:
+			world.player.x = _start_x
+			world.camera_x = _start_x + 60.0
 		_set_mode("play" if _autoplay else _shot_at_mode if _shot_at_mode != "" else "play")
 
 
@@ -212,6 +221,14 @@ func _parse_args() -> void:
 				DisplayServer.window_set_size(Vector2i(int(wh[0]), int(wh[1])))
 		elif a == "--auto":
 			_autoplay = true
+		elif a.begins_with("--zone="):
+			_start_zone = int(a.substr(7))
+		elif a.begins_with("--x="):
+			_start_x = float(a.substr(4))
+		elif a.begins_with("--seed="):
+			_seed_over = int(a.substr(7))
+		elif a.begins_with("--settings-sel="):
+			settings_sel = int(a.substr(15))
 		elif a == "--flickertest":
 			_flick = true
 		elif a.begins_with("--set="):
@@ -234,10 +251,53 @@ func _title_world() -> void:
 
 
 func _start_run() -> void:
-	var seed := randi() & 0xFFFF
-	world = World.new(Run.new(seed, str(settings.get("difficulty", "normal"))), seed, 0)
+	var seed := randi() & 0xFFFF if _seed_over < 0 else _seed_over
+	var run := Run.new(seed, str(settings.get("difficulty", "normal")))
+	run.cheat = _cheat_on
+	world = World.new(run, seed, 0)
 	scene.ensure_zone(0, seed, world.length)
 	_set_mode("intro")
+
+
+# ---------------------------------------------------------------- Cheat
+const CHEAT := "giveall"
+var _typed := ""
+var _cheat_on := false
+
+
+## Irgendwo im Spiel "giveall" tippen: unsterblich, Ausgang immer offen.
+## "giveall1".."giveall5": zusätzlich direkt in Sektor 1-5 springen.
+func _cheat_input(ch: String) -> bool:
+	if ch == "" or ch.unicode_at(0) < 32:
+		return false
+	_typed = (_typed + ch.to_lower()).right(12)
+	var t := _typed
+	if t.length() >= 8 and t.substr(t.length() - 8, 7) == CHEAT and "12345".contains(t.right(1)):
+		_typed = ""
+		_cheat_goto(int(t.right(1)) - 1)
+		return true
+	if t.ends_with(CHEAT):
+		_cheat_on = true
+		if world != null and world.run != null:
+			world.run.cheat = true
+			world._say("CHEAT: GIVEALL")
+		audio.play("bounty")
+	return false
+
+
+func _cheat_goto(zi: int) -> void:
+	var seed := randi() & 0xFFFF
+	var fresh := mode in ["title", "over", "victory"] or world == null or world.run == null
+	var run: Run = Run.new(seed, str(settings.get("difficulty", "normal"))) if fresh else world.run
+	run.cheat = true
+	_cheat_on = true
+	run.hp = run.max_hp
+	audio.play("bounty")
+	_transition(func() -> void:
+		world = World.new(run, seed, zi)
+		scene.ensure_zone(zi, seed, world.length)
+		options = []
+		_set_mode("intro"))
 
 
 func _set_mode(m: String) -> void:
@@ -339,6 +399,8 @@ func _process(delta: float) -> void:
 		touch.set_mode(mode)
 		touch.set_help(help)
 	audio.update(dt, world, mode)
+	if textmode != null:
+		textmode.sync_palette()
 
 	var cam: Variant = title_cam if mode == "title" else null
 	var _t0 := Time.get_ticks_usec()
@@ -470,6 +532,12 @@ func _devtest_tick() -> void:
 		_set_mode("over")
 	elif f == 300:
 		_transition(_title_world)
+	elif f == 330:
+		for ch in "giveall3":         # Cheat: Sektor 3, unsterblich
+			_cheat_input(ch)
+	elif f == 390:
+		var ok: bool = world.zone_index == 2 and world.run.cheat and world.exit_open()
+		print("devtest cheat giveall3: ", "ok" if ok else "FEHLER (zone=%d cheat=%s)" % [world.zone_index, world.run.cheat])
 
 
 # ---------------------------------------------------------------- Spiel
@@ -569,6 +637,10 @@ func _input(e: InputEvent) -> void:
 		elif st.pressed:
 			_mouse_press(st.position, MOUSE_BUTTON_LEFT)
 	elif e.is_pressed():
+		if e is InputEventKey and not (e as InputEventKey).echo:
+			var uc := (e as InputEventKey).unicode
+			if uc >= 32 and _cheat_input(String.chr(uc)):
+				return
 		_on_action(e)
 
 
@@ -822,22 +894,7 @@ func _settings_adjust(d: int) -> void:
 
 ## Qualitaetsstufe setzt die Einzeloptionen.
 func _apply_quality(q: String) -> void:
-	match q:
-		"hoch":
-			settings["reflections"] = true
-			settings["rain"] = "viel"
-			settings["fog"] = true
-			settings["fx"] = true
-		"mittel":
-			settings["reflections"] = false
-			settings["rain"] = "viel"
-			settings["fog"] = true
-			settings["fx"] = true
-		_:
-			settings["reflections"] = false
-			settings["rain"] = "aus"
-			settings["fog"] = false
-			settings["fx"] = false
+	settings.merge(DSettings.QUALITY.get(q, DSettings.QUALITY["niedrig"]), true)    # wie settings.QUALITY
 
 
 ## Alle Darstellungs-/Leistungsoptionen an Szene, CRT, Textmodus und Touch weitergeben.
@@ -852,6 +909,7 @@ func _apply_settings() -> void:
 	var want_text := str(settings.get("render_mode", "crt")) == "text"
 	if textmode != null:
 		textmode.set_enabled(want_text)
+		textmode.sync_palette()
 		chain.scene_tex = text_scene_tex if want_text else base_scene_tex
 	if touch != null:
 		touch.refresh_visibility(settings)

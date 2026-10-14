@@ -147,7 +147,7 @@ func test_scan_far_hides_serial() -> void:
 
 func test_kill_outcomes() -> void:
 	var w := World.new(null, 3, 2)
-	var rep := _first(w.actors, _rep)
+	var rep := _first(w.actors, func(a: Actor) -> bool: return a.is_replicant and a.hp <= 1)   # kein zäher Nexus
 	_place_near(w, rep)
 	w.target = rep
 	for a: Actor in w.actors:
@@ -458,10 +458,10 @@ func test_cancel_aim_no_shot() -> void:
 func test_boss_flow() -> void:
 	var w := World.new(null, 3, 4)
 	_quiet(w)
-	w.player.x = w.length - Config.ROY_TRIGGER + 5
 	w.update(DT, {})
-	_ok(not w.boss_spawned, "ROY spawnt, obwohl der Auftrag nicht erfüllt ist")
-	w.stats["reps"] = w.quota
+	_ok(w.boss_spawned and w.roy_waiting, "ROY steht nicht von Anfang an vor Sebastians Haus")
+	w.stats["reps"] = w.quota          # Tyrell-Auftrag erfüllt
+	w.player.x = w.boss.x - 60         # herangehen: er beginnt
 	w.update(DT, {})
 	var b := w.boss
 	_ok(w.boss_spawned and b != null and b.alive and b.hp == Config.ROY_HP, "ROY fehlt")
@@ -475,6 +475,94 @@ func test_boss_flow() -> void:
 		w._hit(b)
 	_ok(not b.alive, "ROY lebt")
 	_ok(w.exit_open(), "Tor blieb nach ROY zu")
+	_ok(not w.roy_spared, "roy_spared trotz Abschuss")
+
+
+func test_cheat_giveall() -> void:
+	var w := World.new(null, 5, 1)
+	_quiet(w)
+	_ok(not w.exit_open(), "Ausgang offen ohne Cheat")
+	w.run.cheat = true
+	_ok(w.exit_open(), "Cheat: Ausgang muss offen sein")
+	w.player.hp = 1
+	w.player.invuln = 0.0
+	var a := _first(w.actors, _npc)
+	_ok(not w.hurt_player(a) and w.player.hp == 1, "Cheat: letztes Herz verloren")
+	w.suspicion = 5.0
+	w._fail("suspicion")
+	_ok(w.state == "playing", "Cheat: trotzdem gescheitert")
+
+
+func test_tyrell_empties_towards_roy() -> void:
+	var w := World.new(null, 3, 4)
+	var end := 0
+	var mid := 0
+	for a: Actor in w.actors:
+		if a.player:
+			continue
+		if a.x > w.length - Config.EMPTY_TO:
+			end += 1
+		if w.length * 0.3 < a.x and a.x < w.length * 0.5:
+			mid += 1
+	_ok(end <= 2 and mid > 10, "Tyrell leert sich nicht: end=%d mid=%d" % [end, mid])
+
+
+## Hat ROY dich bis auf ein Herz geschlagen, lässt er ab. Schießt man nicht, spricht er
+## seinen Monolog, stirbt von selbst und eine Taube fliegt auf.
+func test_roy_spares_you() -> void:
+	var w := World.new(null, 3, 4)
+	_quiet(w)
+	w.player.x = w.length - Config.ROY_TRIGGER + 5
+	w.stats["reps"] = w.quota
+	w.update(DT, {})
+	var b := w.boss
+	w.boss_speak_t = 0.0
+	w.player.hp = 2
+	w.player.invuln = 0.0
+	_ok(w.hurt_player(b), "vorletztes Herz nicht verloren")
+	w.player.invuln = 0.0
+	_ok(not w.hurt_player(b) and w.player.hp == 1, "ROY nimmt das letzte Herz")
+	_ok(w.roy_mercy, "keine Gnade")
+	w.events.clear()
+	var doves := 0
+	for _i in int(Config.ROY_MONO_S * Config.ROY_LINES.size() / DT) + 30:
+		w.update(DT, {})
+		doves += _count_ev(w, "dove")
+		w.events.clear()
+		if not b.alive:
+			break
+	_ok(not b.alive and w.roy_spared and doves > 0, "ROY ist nicht von selbst gestorben")
+	_ok(w.player.hp == 1 and w.exit_open(), "Herz/Ausgang nach ROYs Tod")
+
+
+func test_roy_killed_when_helpless() -> void:
+	var w := World.new(null, 3, 4)
+	_quiet(w)
+	w.player.x = w.length - Config.ROY_TRIGGER + 5
+	w.stats["reps"] = w.quota
+	w.update(DT, {})
+	var b := w.boss
+	_ok(w.roy_waiting, "ROY soll erst dastehen und warten")
+	w.player.x = b.x - 60
+	w.update(DT, {})
+	_ok(not w.roy_waiting, "ROY wartet weiter")
+	w.boss_speak_t = 0.0
+	w.player.hp = 1
+	w.update(DT, {})
+	_ok(w.roy_mercy, "keine Gnade bei einem Herz")
+	_ok(w._hit(b) == "boss_dead" and not w.roy_spared, "wehrloser ROY hält mehr als einen Schuss aus")
+
+
+func test_towers_are_objects() -> void:
+	for z in 5:
+		var w := World.new(null, 7, z)
+		var back := false
+		var near := false
+		for o: Dictionary in w.obstacles:
+			if o["kind"] == "tower":
+				back = back or float(o["d"]) < 0.1
+				near = near or float(o["d"]) > 1.0
+		_ok(back and near, "Zone %d: Ampeltürme fehlen" % z)
 
 
 func test_manual_target_scan_too_far() -> void:

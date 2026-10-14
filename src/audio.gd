@@ -313,8 +313,12 @@ func _tension_of(world: Variant, mode: String) -> float:
 	var t := 0.8 * float(_ga(world, "unrest", 0.0))
 	if _ga(world, "aiming", false):
 		t = maxf(t, 0.55)
-	if _ga(world, "boss", null) != null:
+	var b: Variant = _ga(world, "boss", null)
+	if b != null and _ga(b, "alive", false) and not _ga(world, "roy_mercy", false) \
+			and not _ga(world, "roy_waiting", false):
 		t = maxf(t, 0.9)
+	if _ga(world, "roy_mercy", false) or _ga(world, "roy_spared", false):
+		return 0.0                    # nur noch Regen und seine Stimme
 	if float(_ga(world, "blackout_t", 0)) > 0:
 		t = maxf(t, 0.5)
 	var run: Variant = _ga(world, "run", null)
@@ -529,8 +533,6 @@ func handle_events(events: Array, world: Variant = null) -> void:
 			play("bounty")
 		elif k == "greet":
 			play("ui")
-		elif k == "thunder":
-			play("thunder")
 		elif k == "blackout":
 			play("blackout")
 		elif k == "blackout_end":

@@ -7,7 +7,7 @@ extends SceneTree
 ##   0.5  shot (vol 0.55)                        -> Pegel/Limiter Kleinsignal
 ##   2.0  rain als Loop (vol 0.5) bis 9.0         -> Loop-Naht bei 3,5 s
 ##   9.5  pulse_z3 zweimal "taktgleich" (je 0.12) bis 14.5 -> Synchronität
-##  15.0  thunder (1.0) + spinner_lr (1.0)         -> Sättigung des Limiters
+##  15.0  blackout (1.0) + spinner_lr (1.0)         -> Sättigung des Limiters
 ##  23.0  music_z3 ab 1,5 s vor Loop-Ende (vol 0.4) -> OGG-Naht
 ##  27.0  Ende
 
@@ -58,7 +58,7 @@ func _process(delta: float) -> bool:
 		m.stop("pulse_z3")
 		step = 5
 	elif step == 5 and t >= 15.0:
-		m.play("thunder", 1.0, false, t)
+		m.play("blackout", 1.0, false, t)
 		m.play("spinner_lr", 1.0, false, t)
 		step = 6
 	elif step == 6 and t >= 23.0:

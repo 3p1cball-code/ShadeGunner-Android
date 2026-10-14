@@ -2,38 +2,41 @@ class_name DCity
 extends RefCounted
 ## AUTOMATISCH ERZEUGT aus shadegunner.render.city (tools/export_data.py) - nicht von Hand ändern.
 
-const AMBER = [255, 138, 44]
-const ASH = [162, 168, 180]
-const BLUE = [74, 92, 138]
+const AMBER = [255, 148, 48]
+const ASH = [150, 162, 168]
+const BLUE = [52, 86, 104]
 const C = [
-	[6, 8, 14],
-	[18, 22, 38],
-	[34, 40, 66],
-	[52, 60, 96],
-	[74, 92, 138],
-	[104, 132, 178],
-	[138, 32, 56],
+	[5, 8, 10],
+	[12, 22, 28],
+	[22, 38, 48],
+	[34, 58, 70],
+	[52, 86, 104],
+	[92, 128, 144],
+	[226, 38, 46],
 	[156, 84, 40],
-	[162, 168, 180],
-	[214, 220, 226],
+	[46, 104, 250],
+	[148, 172, 170],
 	[255, 255, 255],
-	[34, 96, 104],
-	[64, 210, 220],
+	[30, 104, 104],
+	[70, 220, 214],
 	[224, 72, 150],
-	[255, 138, 44],
-	[122, 74, 168],
+	[255, 148, 48],
+	[80, 226, 110],
 ]
 const CLOUD_F = 0.035
-const CRIMSON = [138, 32, 56]
-const CYAN = [64, 210, 220]
+const CRIMSON = [150, 28, 40]
+const CYAN = [70, 220, 214]
 const FAR_F = 0.1
+const GREEN = [80, 226, 110]
 const H = 360
-const INDIGO = [52, 60, 96]
+const INDIGO = [34, 58, 70]
 const MAGENTA = [224, 72, 150]
 const MID_F = 0.3
-const NAVY = [34, 40, 66]
-const NIGHT = [18, 22, 38]
-const PALE = [214, 220, 226]
+const NAVY = [22, 38, 48]
+const NBLUE = [46, 104, 250]
+const NIGHT = [12, 22, 28]
+const PALE = [148, 172, 170]
+const RED = [226, 38, 46]
 const SHOP_KINDS = {
 	"industrial": [["repair", 3], ["shutter", 3], ["bar", 2], ["kiosk", 2], ["diner", 2]],
 	"blocks": [
@@ -58,6 +61,7 @@ const SHOP_KINDS = {
 	],
 	"harbor": [["shutter", 4], ["bar", 2], ["repair", 2], ["kiosk", 1], ["noodle", 1]],
 	"tyrell": [["lobby", 4], ["shutter", 1], ["eye", 1]],
+	"derelict": [["shutter", 6], ["pawn", 1], ["repair", 1]],
 }
 const SHOP_WORDS = {
 	"repair": ["REPARATUR", "PARTS", "SCHROTT", "MOTOREN"],
@@ -74,34 +78,34 @@ const SHOP_WORDS = {
 	"animoid": ["KUNSTTIERE", "ANIMOID"],
 	"lobby": ["TYRELL", "NEXUS", "EMPFANG"],
 }
-const SLATE = [112, 118, 132]
+const SLATE = [104, 118, 126]
 const SODIUM = [156, 84, 40]
-const STEEL = [104, 132, 178]
-const TEAL = [34, 96, 104]
+const STEEL = [92, 128, 144]
+const TEAL = [30, 104, 104]
 const THEMES = [
 	{
 		"name": "Außenbezirk",
 		"style": "industrial",
-		"sky_top": [8, 6, 14],
-		"sky_mid": [44, 22, 34],
-		"sky_hor": [140, 62, 46],
-		"cloud": [54, 30, 38],
-		"cloud_lit": [150, 74, 50],
-		"building": [28, 28, 40],
-		"building_hi": [52, 50, 64],
-		"far": [40, 24, 34],
-		"mid": [30, 24, 38],
+		"sky_top": [8, 6, 16],
+		"sky_mid": [36, 24, 52],
+		"sky_hor": [132, 64, 52],
+		"cloud": [46, 32, 58],
+		"cloud_lit": [150, 76, 60],
+		"building": [26, 26, 44],
+		"building_hi": [50, 50, 76],
+		"far": [36, 26, 50],
+		"mid": [28, 26, 46],
 		"lit": 0.16,
-		"win": [[[255, 138, 44], 3], [[170, 120, 70], 3], [[104, 132, 178], 1]],
-		"neon": [[255, 138, 44], [34, 96, 104], [138, 32, 56], [64, 210, 220]],
+		"win": [[[255, 156, 56], 3], [[196, 104, 44], 3], [[100, 104, 142], 1]],
+		"neon": [[255, 156, 56], [255, 156, 56], [196, 104, 44], [150, 104, 220], [84, 128, 255], [255, 216, 140]],
 		"sign_rate": 0.35,
 		"lamp": [255, 150, 60],
 		"lamp_every": [130, 180],
-		"street": [20, 18, 26],
-		"asphalt": [32, 30, 40],
+		"street": [16, 16, 24],
+		"asphalt": [26, 26, 36],
 		"rain": 0.55,
-		"fog": [44, 28, 36],
-		"fog_amt": 0.45,
+		"fog": [38, 30, 44],
+		"fog_amt": 0.42,
 		"flames": true,
 		"spinners": 1,
 		"blimp": false,
@@ -109,7 +113,7 @@ const THEMES = [
 		"searchlights": 0,
 		"pyramid": false,
 		"cranes": false,
-		"rim": [140, 90, 70],
+		"rim": [150, 96, 70],
 		"words": ["REPARATUR", "SCHROTT", "24H", "PARTS", "TANKE", "LAGER", "MOTEL", "BAR"],
 		"h_range": [50, 115],
 		"mid_h": [70, 170],
@@ -118,25 +122,31 @@ const THEMES = [
 	{
 		"name": "Vorstadt",
 		"style": "blocks",
-		"sky_top": [6, 8, 16],
-		"sky_mid": [20, 20, 42],
-		"sky_hor": [66, 44, 92],
-		"cloud": [30, 28, 50],
-		"cloud_lit": [90, 66, 120],
-		"building": [18, 22, 36],
-		"building_hi": [34, 40, 62],
-		"far": [24, 22, 42],
-		"mid": [20, 22, 40],
+		"sky_top": [5, 9, 10],
+		"sky_mid": [12, 26, 28],
+		"sky_hor": [34, 76, 70],
+		"cloud": [20, 34, 36],
+		"cloud_lit": [60, 108, 98],
+		"building": [14, 22, 24],
+		"building_hi": [30, 46, 48],
+		"far": [18, 30, 32],
+		"mid": [16, 26, 28],
 		"lit": 0.24,
-		"win": [[[170, 180, 200], 3], [[255, 138, 44], 2], [[64, 210, 220], 1], [[110, 120, 200], 2]],
-		"neon": [[64, 210, 220], [122, 74, 168], [224, 72, 150], [34, 96, 104], [255, 138, 44]],
+		"win": [
+			[[176, 242, 196], 3],
+			[[70, 214, 120], 2],
+			[[60, 190, 214], 2],
+			[[196, 218, 212], 2],
+			[[236, 86, 150], 1],
+		],
+		"neon": [[70, 214, 120], [70, 214, 120], [60, 190, 214], [176, 242, 196], [236, 86, 150], [60, 190, 214]],
 		"sign_rate": 0.5,
-		"lamp": [170, 230, 240],
+		"lamp": [170, 240, 200],
 		"lamp_every": [150, 210],
-		"street": [14, 16, 28],
-		"asphalt": [22, 24, 38],
+		"street": [12, 18, 20],
+		"asphalt": [20, 28, 30],
 		"rain": 0.4,
-		"fog": [34, 30, 56],
+		"fog": [22, 40, 40],
 		"fog_amt": 0.35,
 		"flames": false,
 		"spinners": 2,
@@ -145,7 +155,7 @@ const THEMES = [
 		"searchlights": 1,
 		"pyramid": false,
 		"cranes": false,
-		"rim": [120, 140, 200],
+		"rim": [110, 190, 160],
 		"words": ["KIOSK", "WASCHSALON", "NUDELN", "BLOCK 7", "APOTHEKE", "PFANDHAUS", "BAR", "LIVE"],
 		"h_range": [110, 210],
 		"mid_h": [80, 200],
@@ -154,26 +164,26 @@ const THEMES = [
 	{
 		"name": "Innenstadt",
 		"style": "market",
-		"sky_top": [8, 6, 16],
-		"sky_mid": [30, 16, 44],
-		"sky_hor": [120, 50, 120],
-		"cloud": [40, 24, 56],
-		"cloud_lit": [150, 60, 140],
-		"building": [16, 18, 32],
-		"building_hi": [36, 34, 64],
-		"far": [32, 22, 52],
-		"mid": [24, 20, 44],
+		"sky_top": [5, 10, 12],
+		"sky_mid": [14, 32, 36],
+		"sky_hor": [46, 112, 108],
+		"cloud": [22, 40, 44],
+		"cloud_lit": [76, 140, 130],
+		"building": [12, 20, 24],
+		"building_hi": [28, 46, 52],
+		"far": [20, 38, 42],
+		"mid": [16, 30, 34],
 		"lit": 0.3,
-		"win": [[[224, 72, 150], 1], [[64, 210, 220], 2], [[255, 138, 44], 2], [[170, 170, 210], 2]],
-		"neon": [[224, 72, 150], [64, 210, 220], [255, 138, 44], [122, 74, 168], [34, 96, 104], [138, 32, 56]],
+		"win": [[[70, 220, 214], 2], [[250, 146, 52], 2], [[148, 172, 170], 2], [[230, 40, 48], 1]],
+		"neon": [[70, 220, 214], [70, 220, 214], [230, 40, 48], [230, 40, 48], [176, 246, 236], [250, 146, 52]],
 		"sign_rate": 1.0,
-		"lamp": [200, 140, 230],
+		"lamp": [150, 240, 220],
 		"lamp_every": [130, 190],
-		"street": [14, 12, 26],
-		"asphalt": [22, 20, 36],
+		"street": [10, 18, 20],
+		"asphalt": [18, 28, 30],
 		"rain": 1.0,
-		"fog": [48, 26, 60],
-		"fog_amt": 0.4,
+		"fog": [28, 60, 58],
+		"fog_amt": 0.42,
 		"flames": false,
 		"spinners": 4,
 		"blimp": true,
@@ -181,7 +191,7 @@ const THEMES = [
 		"searchlights": 2,
 		"pyramid": false,
 		"cranes": false,
-		"rim": [200, 90, 180],
+		"rim": [90, 200, 186],
 		"words": [
 			"NUDELN",
 			"SUSHI",
@@ -205,26 +215,26 @@ const THEMES = [
 	{
 		"name": "Hafen",
 		"style": "harbor",
-		"sky_top": [6, 8, 12],
-		"sky_mid": [22, 28, 36],
-		"sky_hor": [70, 80, 84],
-		"cloud": [34, 40, 48],
-		"cloud_lit": [90, 96, 96],
-		"building": [18, 20, 26],
-		"building_hi": [40, 40, 46],
-		"far": [34, 40, 48],
-		"mid": [26, 30, 38],
+		"sky_top": [6, 8, 10],
+		"sky_mid": [20, 26, 34],
+		"sky_hor": [70, 80, 90],
+		"cloud": [32, 38, 48],
+		"cloud_lit": [92, 100, 108],
+		"building": [18, 22, 28],
+		"building_hi": [40, 46, 54],
+		"far": [32, 38, 48],
+		"mid": [24, 30, 38],
 		"lit": 0.08,
-		"win": [[[255, 138, 44], 3], [[34, 96, 104], 1]],
-		"neon": [[255, 138, 44], [34, 96, 104], [138, 32, 56]],
+		"win": [[[255, 162, 66], 3], [[128, 180, 208], 1]],
+		"neon": [[255, 162, 66], [255, 162, 66], [196, 108, 46], [128, 180, 208], [255, 214, 152]],
 		"sign_rate": 0.3,
 		"lamp": [255, 150, 60],
 		"lamp_every": [160, 220],
 		"street": [14, 16, 20],
-		"asphalt": [24, 26, 30],
+		"asphalt": [24, 28, 32],
 		"rain": 0.35,
-		"fog": [70, 78, 84],
-		"fog_amt": 0.75,
+		"fog": [52, 62, 72],
+		"fog_amt": 0.62,
 		"flames": true,
 		"spinners": 2,
 		"blimp": false,
@@ -241,25 +251,25 @@ const THEMES = [
 	{
 		"name": "Tyrell",
 		"style": "tyrell",
-		"sky_top": [6, 6, 12],
-		"sky_mid": [36, 24, 30],
-		"sky_hor": [150, 90, 50],
-		"cloud": [46, 32, 34],
-		"cloud_lit": [170, 110, 60],
-		"building": [14, 16, 24],
-		"building_hi": [44, 44, 56],
-		"far": [40, 28, 30],
-		"mid": [24, 22, 30],
+		"sky_top": [5, 6, 12],
+		"sky_mid": [30, 26, 40],
+		"sky_hor": [156, 98, 48],
+		"cloud": [40, 34, 46],
+		"cloud_lit": [176, 116, 60],
+		"building": [12, 14, 26],
+		"building_hi": [40, 44, 66],
+		"far": [34, 30, 40],
+		"mid": [20, 22, 34],
 		"lit": 0.16,
-		"win": [[[255, 138, 44], 3], [[220, 200, 160], 2], [[214, 220, 226], 1]],
-		"neon": [[214, 220, 226], [255, 138, 44], [64, 210, 220]],
+		"win": [[[240, 170, 70], 3], [[255, 222, 150], 2], [[220, 214, 200], 1]],
+		"neon": [[240, 170, 70], [255, 222, 150], [220, 214, 200], [130, 180, 255], [240, 170, 70]],
 		"sign_rate": 0.2,
 		"lamp": [230, 236, 255],
 		"lamp_every": [140, 180],
-		"street": [14, 14, 20],
-		"asphalt": [26, 26, 32],
+		"street": [12, 14, 20],
+		"asphalt": [24, 26, 34],
 		"rain": 0.3,
-		"fog": [60, 40, 36],
+		"fog": [50, 42, 50],
 		"fog_amt": 0.35,
 		"flames": true,
 		"spinners": 3,
@@ -276,7 +286,6 @@ const THEMES = [
 	},
 ]
 const TPU = 2.0
-const VIOLET = [122, 74, 168]
-const VOID = [6, 8, 14]
+const VOID = [5, 8, 10]
 const W = 640
 const WHITE = [255, 255, 255]

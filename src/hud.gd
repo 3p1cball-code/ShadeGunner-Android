@@ -309,6 +309,8 @@ func render(world: Variant, scene: Variant, dt: float, ui: Variant = null) -> Te
 			_events(p, world)
 			_reticle(p, u.get("mouse"), world)
 			_boss(p, world)
+	if world != null and _truthy(_ga(_ga(world, "run"), "cheat", false)) and mode in ["play", "pause", "intro"]:
+		_t(p, HW - 16, HH - 56, "GIVEALL", MAGENTA, 2, "right")
 	if mode == "title":
 		_title(p, u)
 	elif mode == "intro":
@@ -395,10 +397,11 @@ func _world_marks(q: QP, world: Variant, scene: Variant) -> void:
 			var y := (top - pulse) if sy < 0 else (bot + pulse)
 			q.fill_rect(x - (L if sx > 0 else 0), y - (3 if sy > 0 else 0), L, 3, QP.rgb(col))
 			q.fill_rect(x - (3 if sx > 0 else 0), y - (L if sy > 0 else 0), 3, L, QP.rgb(col))
-		var label := Py.fmt("#{:04d}", [tg.uid])
-		if _truthy(tg.revealed):
-			label += "  %d%%" % Py.round(c * 100)
-		_t(q, cx, top - pulse - 22, label, col, 2, "center")
+		if not is_same(tg, _ga(world, "boss")):          # ROY trägt sein eigenes Label
+			var label := Py.fmt("#{:04d}", [tg.uid])
+			if _truthy(tg.revealed):
+				label += "  %d%%" % Py.round(c * 100)
+			_t(q, cx, top - pulse - 22, label, col, 2, "center")
 		if tg.state == "flee":
 			_t(q, cx, top - pulse - 40, "FLÜCHTET", AMBER, 2, "center")
 		elif tg.state in ["attack", "punch"]:
@@ -413,8 +416,11 @@ func _world_marks(q: QP, world: Variant, scene: Variant) -> void:
 		var bgy: float = sc[1]
 		var bh: float = sc[2]
 		var col: Array = AMBER if bo.boss_invuln else WHITE
+		var mercy := _truthy(_ga(world, "roy_mercy", false))
+		if mercy:
+			col = PALE
 		_t(q, bx, bgy - bh * 1.12 - 22, "ROY", col, 3, "center")
-		if bo.boss_invuln:
+		if bo.boss_invuln and not mercy:
 			_t(q, bx, bgy - bh * 1.12 - 48, "(REDET)", ASH, 2, "center")
 	# Blocker in der Schusslinie
 	var b: Variant = world.blocker if world.aiming else null
@@ -536,6 +542,19 @@ func _boss(q: QP, world: Variant) -> void:
 	var b: Variant = _ga(world, "boss")
 	if b == null or not b.alive:
 		return
+	var text: Variant = _ga(world, "boss_text")
+	if _truthy(_ga(world, "roy_waiting", false)):
+		return                                    # er steht nur da - noch kein Kampf
+	if _truthy(_ga(world, "roy_mercy", false)):
+		# Kein Lebensbalken mehr - nur er, der Regen und was er sagt
+		if _truthy(text):
+			var k := 1.0 - float(world.boss_speak_t) / maxf(0.1, float(world.boss_text_dur))
+			var line := I18n.t(text)
+			var n := int(line.length() * minf(1.0, k * 1.8))
+			var parts := wrap_(line.substr(0, maxi(0, n)), 56)
+			for i in parts.size():
+				_t(q, Py.ifloordiv(HW, 2), HH - 190 + i * 24, parts[i], PALE, 2, "center")
+		return
 	var w2 := 384
 	var h2 := 30
 	var x2 := Py.ifloordiv(HW - w2, 2)
@@ -555,9 +574,9 @@ func _boss(q: QP, world: Variant) -> void:
 	for i in segs:
 		var on := i < int(b.hp)
 		q.fill_rect(bx + i * segw, y2 + 10, segw - 2, 11, QP.rgb(RED if on else [42, 22, 28]))
-	if float(_ga(world, "boss_speak_t", 0.0)) > 0.0:
-		var line := I18n.t(Config.ROY_LINES[int(_ga(world, "boss_line", 0))])
-		var k := 1.0 - float(world.boss_speak_t) / Config.ROY_SPEAK_S
+	if float(_ga(world, "boss_speak_t", 0.0)) > 0.0 and _truthy(text):
+		var line := I18n.t(text)
+		var k := 1.0 - float(world.boss_speak_t) / maxf(0.1, float(world.boss_text_dur))
 		var n := int(line.length() * minf(1.0, k * 1.35))
 		if narrow():
 			_ct(q, HH - 172, "ROY: " + line, PALE, 2, 1.0, true, true, 5 + maxi(0, n))
@@ -956,6 +975,9 @@ func _settings(q: QP, ui: Dictionary) -> void:
 	if SETTING_ROWS[sel][0] == "difficulty":
 		_t(q, Py.ifloordiv(HW, 2), note, "MEHR MENSCHEN JE VIERTEL - GILT AB DEM NÄCHSTEN EINSATZ", SLATE, 2, "center")
 		note += 22
+	elif SETTING_ROWS[sel][0] in ["quality", "reflections", "rain", "fog", "fx"]:
+		_t(q, Py.ifloordiv(HW, 2), note, "WENIGER EFFEKTE = MEHR BILDER PRO SEKUNDE", SLATE, 2, "center")
+		note += 22
 	_t(q, Py.ifloordiv(HW, 2), maxi(HH - 70, note + 2), "▲▼  WÄHLEN      ← →  ÄNDERN      ESC / S  ZURÜCK", ASH, 2, "center")
 
 
@@ -1041,10 +1063,13 @@ static func _clear_geom() -> Dictionary:
 func _end(q: QP, world: Variant, ui: Dictionary, won: bool) -> void:
 	_dim(q, 185)
 	var run: Variant = world.run
-	if won:
+	if won and _truthy(_ga(run, "roy_spared", false)):
+		_t(q, Py.ifloordiv(HW, 2), 90, "ROY HAT DICH VERSCHONT", PALE, 5, "center")
+		_t(q, Py.ifloordiv(HW, 2), 160, "SCHADE, DASS ER NICHT LEBEN WIRD.", ASH, 2, "center")
+		_t(q, Py.ifloordiv(HW, 2), 184, "ABER WER LEBT SCHON?", ASH, 2, "center")
+	elif won:
 		_t(q, Py.ifloordiv(HW, 2), 90, "TYRELL HQ ERREICHT", GREEN, 5, "center")
-		_t(q, Py.ifloordiv(HW, 2), 160, "ALL DIESE MOMENTE WERDEN VERLOREN SEIN", ASH, 2, "center")
-		_t(q, Py.ifloordiv(HW, 2), 184, "IN DER ZEIT, SO WIE TRÄNEN IM REGEN.", ASH, 2, "center")
+		_t(q, Py.ifloordiv(HW, 2), 160, "SIE HABEN GANZE ARBEIT GELEISTET, SIR.", ASH, 2, "center")
 	else:
 		_t(q, Py.ifloordiv(HW, 2), 90, "EINSATZ BEENDET", RED, 5, "center")
 		var reason := ("VERDACHT ZU HOCH - DIENSTMARKE ENTZOGEN" if world.fail_reason == "suspicion"

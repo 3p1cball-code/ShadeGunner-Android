@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bpgatusfc2frs"
-path="res://.godot/imported/shot-43.png-2c3a909e43f375d5b421bffb5b1df516.ctex"
+uid="uid://dwlbb8rcsefee"
+path="res://.godot/imported/shadegunner-192.png-c2e8b2eaf205128f32fd19c6f1b4ed5e.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://screenshots/shot-43.png"
-dest_files=["res://.godot/imported/shot-43.png-2c3a909e43f375d5b421bffb5b1df516.ctex"]
+source_file="res://assets/icons/shadegunner-192.png"
+dest_files=["res://.godot/imported/shadegunner-192.png-c2e8b2eaf205128f32fd19c6f1b4ed5e.ctex"]
 
 [params]
 

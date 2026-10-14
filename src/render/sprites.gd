@@ -42,6 +42,10 @@ static var _CACHE := {}
 static var _cache_obj: ExactCache     # Atlanten + Freigabe (src/render/exact_cache.gd)
 
 
+static func _mix(a: Array, b: Array, t: float) -> Array:
+	return [int(a[0] + (b[0] - a[0]) * t), int(a[1] + (b[1] - a[1]) * t), int(a[2] + (b[2] - a[2]) * t)]
+
+
 static func _mul(c: Array, f: float) -> Array:
 	return [maxi(0, mini(255, int(float(c[0]) * f))), maxi(0, mini(255, int(float(c[1]) * f))),
 		maxi(0, mini(255, int(float(c[2]) * f)))]
@@ -536,6 +540,16 @@ static func _umbrella(p: QP, emit: QP, look: Dictionary, hc: Vector2) -> void:
 		p.draw_ellipse(apex.x - R * 0.5, apex.y + 0.5, R, 6.0)
 		_pen(p, [220, 232, 244], 0.8, 150)
 		_polyline(p, _pa(pts.slice(0, 13)))
+	elif look.get("umb_style") == "paper":
+		# Geöltes Papier über Bambusrippen, vom Leuchtstab warm durchschienen
+		var paper: Array = DSprites.PAPER
+		_fill(p, _mul(paper, 0.62), 235)
+		p.draw_polygon(canopy)
+		_fill(p, _mix(_mul(paper, 0.95), uc, 0.25), 170)
+		p.draw_polygon(_pa([[apex.x - R * 0.45, apex.y + 7.4], apex, [apex.x + R * 0.45, apex.y + 7.4]]))
+		_pen(p, _mul(paper, 0.35), 0.5, 200)
+		for i: int in [2, 4, 8, 10]:
+			_line(p, apex, pts[i])
 	else:
 		_fill(p, _mul(uc, 0.32), 215)
 		p.draw_polygon(canopy)

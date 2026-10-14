@@ -24,7 +24,6 @@ const VOLUME = {
 	"bike_lr": 0.35,
 	"bike_rl": 0.35,
 	"patrol": 0.45,
-	"thunder": 0.6,
 	"honk": 0.75,
 	"honk_meep": 0.5,
 	"bump": 0.45,

@@ -33,9 +33,14 @@ var phase := 0                 # 0 Start | 1 Zone settlen | 2 Schuss settlen | 3
 
 
 func _ready() -> void:
+	var fixed: Array = []
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--out="):
 			out = a.substr(6)
+		elif a.begins_with("--cams="):
+			for c: String in a.substr(7).split(","):
+				var zx := c.split(":")
+				fixed.append([int(zx[0]), float(zx[1])])
 	DirAccess.make_dir_recursive_absolute(out)
 	baker = Baker.new()
 	add_child(baker)
@@ -46,6 +51,19 @@ func _ready() -> void:
 	Holo.baker = baker
 	sc = Scene.new()
 	sc.setup(self, baker)
+	if not fixed.is_empty():
+		_fixed = fixed
+		var made := {}
+		for fz: Array in fixed:
+			var z: int = fz[0]
+			if not made.has(z):
+				var w := World.new(Run.new(SEED, "normal"), SEED, z)
+				for i in STEPS:
+					w.update(DT, {})
+					w.events.clear()
+				made[z] = w
+			zones.append([made[z], z, fz[1]])
+		return
 	for z in 5:
 		var w := World.new(Run.new(SEED, "normal"), SEED, z)
 		for i in STEPS:
@@ -78,17 +96,34 @@ func _process(_d: float) -> void:
 func _draw_shot() -> void:
 	var w: World = zones[zi][0]
 	var base: float = zones[zi][2]
-	w.camera_x = clampf(base + CAMS[ci], 0.0, w.length)
+	if _fixed.is_empty():
+		w.camera_x = clampf(base + CAMS[ci], 0.0, w.length)
+	else:
+		w.camera_x = base
 	sc.frame(w, DT)
 
 
 func _save_shot() -> void:
 	var im := sc.img.get_image()
 	im.convert(Image.FORMAT_RGBA8)
-	im.save_png(out.path_join("gd_z%d_c%d.png" % [zi, ci]))
+	im.save_png(out.path_join(("gd_f%d.png" % zi) if not _fixed.is_empty() else ("gd_z%d_c%d.png" % [zi, ci])))
+
+
+var _fixed: Array = []
 
 
 func _advance() -> void:
+	if not _fixed.is_empty():
+		zi += 1
+		if zi < zones.size():
+			sc.ensure_zone(zones[zi][1], SEED, (zones[zi][0] as World).length)
+			phase = 1
+			wait = SETTLE
+			return
+		print("scene_test: ", zones.size(), " Bilder -> ", out)
+		phase = 3
+		get_tree().quit()
+		return
 	ci += 1
 	if ci < CAMS.size():
 		phase = 1

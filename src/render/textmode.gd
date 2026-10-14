@@ -57,6 +57,7 @@ var gamma := 0.7
 
 var _mat: ShaderMaterial
 var _scene: Texture2D
+var _pal := ""
 
 
 ## Baut den Text-Viewport unter parent und liefert dessen View.W x 360-Textur.
@@ -112,7 +113,16 @@ func set_curve(gain_: float, gamma_: float) -> void:
 		_apply()
 
 
+## Aktive Zonenpalette übernehmen (nur bei Wechsel).
+func sync_palette() -> void:
+	if _mat != null and _pal != Palette.active:
+		_pal = Palette.active
+		_mat.set_shader_parameter("PAL", Palette.v3())
+
+
 func _apply() -> void:
+	_pal = Palette.active
+	_mat.set_shader_parameter("PAL", Palette.v3())
 	_mat.set_shader_parameter("u_scene", _scene)
 	_mat.set_shader_parameter("u_atlas", _build_atlas(cell_px, charset))
 	_mat.set_shader_parameter("u_res", Vector2(RW, RH))

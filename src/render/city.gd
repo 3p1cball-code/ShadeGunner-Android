@@ -23,6 +23,9 @@ const INDIGO := DCity.INDIGO
 const BLUE := DCity.BLUE
 const STEEL := DCity.STEEL
 const CRIMSON := DCity.CRIMSON
+const RED := DCity.RED
+const NBLUE := DCity.NBLUE
+const GREEN := DCity.GREEN
 const SODIUM := DCity.SODIUM
 const ASH := DCity.ASH
 const PALE := DCity.PALE
@@ -32,7 +35,6 @@ const TEAL := DCity.TEAL
 const CYAN := DCity.CYAN
 const MAGENTA := DCity.MAGENTA
 const AMBER := DCity.AMBER
-const VIOLET := DCity.VIOLET
 
 ## Bildbreite zur Laufzeit (View.W: 640 ohne View.setup, sonst 480..960); Höhe fest.
 ## Alle Verwendungen meinen die BILDSCHIRMBREITE (Mitte, Ränder, Kulling, Breitenschleifen,
@@ -200,6 +202,9 @@ void fragment() {
 """
 
 
+static var _box_shader: Shader
+
+
 static func _box_down_gpu(src: Texture2D, w: int, h: int, sw: int, sh: int) -> Texture2D:
 	var vp := SubViewport.new()
 	vp.size = Vector2i(maxi(1, sw), maxi(1, sh))
@@ -211,9 +216,10 @@ static func _box_down_gpu(src: Texture2D, w: int, h: int, sw: int, sh: int) -> T
 	cr.position = Vector2.ZERO
 	cr.size = Vector2(sw, sh)
 	var mat := ShaderMaterial.new()
-	var shd := Shader.new()
-	shd.code = BOX_SHADER
-	mat.shader = shd
+	if _box_shader == null:           # einmal kompilieren, nicht je Aufruf
+		_box_shader = Shader.new()
+		_box_shader.code = BOX_SHADER
+	mat.shader = _box_shader
 	mat.set_shader_parameter("src", src)
 	mat.set_shader_parameter("box", Vector2(float(w) / sw, float(h) / sh))
 	mat.set_shader_parameter("srcsize", Vector2(w, h))
@@ -601,6 +607,13 @@ var lanterns: Array = []
 var tvs: Array = []
 var searchlights: Array = []
 var ramen_spots: Array = []
+var fires: Array = []                # Feuertonnen [L, y, s, seed] (Props)
+var walks: Array = []                # Fußgängerampeln [L, y, ph, sz] (Props)
+var spans: Array = []                # Überbauten (Brücken / Überhänge)
+var wires: Array = []                # Kabel quer über die Straße
+var sebastian_span: Array = []       # [x0, x1] im Fassadenbild (Tyrell-Ende)
+var rng_deco: PyRandom
+var _derelict := false
 var exit_x: float
 var exit_L: int = 0
 var ground_y0: int = 0
@@ -638,13 +651,16 @@ func _init(zone_index: int, length_: float, seed__: int) -> void:
 	cam_min = -120.0
 	cam_max = length + 220.0
 	fy = int(Persp.FACADE_Y)
+	rng_deco = PyRandom.new(seed_ * 523 + zone_index * 7 + 1)
 	exit_x = length
 	_sky()
 	_clouds()
 	_far()
 	_mid()
+	_spans()
 	_facade()
 	_holos()
+	_wires()
 	_ground()
 	_fog_tex()
 	_cloud_bank()
@@ -998,10 +1014,28 @@ func _facade() -> void:
 			var L := lx * fac.factor
 			var arm := _rng.randint(10, 18)
 			var y := base - _rng.randint(46, 60)
-			_lamp_post(p, fac.lx(L), y, base, arm)
-			lamps.append(Lamp.new(lx, L, y, arm, th["lamp"], _rng.randint(0, 9999), _rng.random() < 0.18))
+			if String(th["style"]) in ["market", "blocks", "industrial"] and rng_deco.random() < 0.45:
+				# V-Doppelleuchte wie im Film: zwei schräge Arme, zwei Köpfe
+				var va := _rng.randint(9, 13)
+				var vcol := qc([30, 32, 36])
+				var x_ := int(fac.lx(L))
+				p.fill_rect(x_, y + 8, 2, base - y - 8, vcol)
+				p.set_pen(vcol, 2.0)
+				p.draw_line(x_ + 1, y + 8, x_ + va, y + 1)
+				p.draw_line(x_ + 1, y + 8, x_ - va + 2, y + 1)
+				p.set_no_pen()
+				var sd := _rng.randint(0, 9999)
+				var fl := _rng.random() < 0.18
+				lamps.append(Lamp.new(lx, L, y, va, th["lamp"], sd, fl))
+				lamps.append(Lamp.new(lx, L, y, -va, th["lamp"], sd + 1, false))
+			else:
+				_lamp_post(p, fac.lx(L), y, base, arm)
+				lamps.append(Lamp.new(lx, L, y, arm, th["lamp"], _rng.randint(0, 9999), _rng.random() < 0.18))
 			lx += _rng.uniform(float(th["lamp_every"][0]), float(th["lamp_every"][1]))
 		_street_props(p, e, fac, _rng, base)
+		if zone == 4:
+			Props.sebastian(self, p, e, fac, base)
+		Props.furnish(self, p, e, fac, base)
 		# Nudelstände an den deterministischen Positionen (Herzen auffüllen)
 		for rx: float in Procgen.ramen_positions(length, seed_, zone):
 			var blx := fac.lx(rx * fac.factor) - 88
@@ -1047,6 +1081,14 @@ func _building(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, bh:
 	var top := base - bh
 	var col := mul(th["building"], rng.uniform(0.8, 1.2))
 	var hi := mul(th["building_hi"], rng.uniform(0.85, 1.1))
+	var look := Props.facade_look(self, rng_deco) if bw >= 40 and bh >= 70 else "plain"
+	# Tyrell: zum Ende hin altes, verlassenes Viertel (Sebastians Straße)
+	_derelict = zone == 4 and (fac.lmin + x) / fac.factor > length * (Config.EMPTY_FROM - 0.04)
+	if _derelict:
+		style = "blocks"
+		look = "old" if bw >= 30 else "plain"
+	if look == "old":
+		col = Props.old_stone(col)
 	var g := QGrad.linear(0, top, 0, base)
 	g.set_color_at(0, qc(mul(col, 0.8)))
 	g.set_color_at(1, qc(mix(col, hi, 0.6)))
@@ -1057,7 +1099,9 @@ func _building(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, bh:
 	p.fill_rect(x + bw - 1, top, 1, bh, qc(mul(col, 0.5)))
 	var dark := mul(col, 0.55)
 	var shop_h := rng.randint(32, 40) if style != "tyrell" else rng.randint(36, 46)
-	if style == "industrial":
+	if look == "modern":
+		Props.modern(p, e, rng_deco, th, x, top, bw, bh, base, shop_h, col, hi)
+	elif style == "industrial":
 		_win_grid(p, e, rng, x, top, bw, base - shop_h, 14, 6, 3, 5, dark)
 		# Rolltor
 		var dw := int(bw * rng.uniform(0.35, 0.55))
@@ -1088,7 +1132,7 @@ func _building(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, bh:
 			p.set_no_pen()
 			p.set_brush(qc(SLATE))
 			p.draw_ellipse(sx, sy, 5, 5)
-	elif style == "tyrell":
+	elif style == "tyrell" and not _derelict:
 		# Monolith: Lichtschlitze statt Fenster
 		var step := rng.randint(18, 30)
 		for xx in range(int(x + 8), int(x + bw - 8), step):
@@ -1100,8 +1144,10 @@ func _building(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, bh:
 	else:
 		_win_grid(p, e, rng, x, top, bw, base - shop_h, rng.choice([12, 14, 16]), rng.randint(4, 6),
 			rng.randint(4, 7), rng.randint(3, 5), dark)
+	if look == "old":
+		Props.ornament(p, e, rng_deco, th, x, top, bw, bh, base, shop_h, col, hi)
 	# Feuerleiter
-	if style in ["market", "blocks", "industrial"] and rng.random() < 0.35 and bh > 90:
+	if look != "modern" and style in ["market", "blocks", "industrial"] and rng.random() < 0.35 and bh > 90:
 		var fx := x + rng.randint(6, maxi(7, int(bw - 30)))
 		var fw := 22
 		p.set_pen(qc(mul(hi, 0.75)), 1.0)
@@ -1114,7 +1160,7 @@ func _building(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, bh:
 	# Klimageräte, Rohre
 	var ay_lo := top + 6
 	var ay_hi := base - shop_h - 8
-	var na := rng.randint(0, 3) if (ay_hi > ay_lo and bw > 12) else 0
+	var na := rng.randint(0, 3) if (ay_hi > ay_lo and bw > 12 and look != "modern") else 0
 	for _i in na:
 		var ax := x + rng.randint(2, int(bw - 10))
 		var ay := rng.randint(int(ay_lo), int(ay_hi))
@@ -1179,7 +1225,7 @@ func _shopfront(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, ba
 	var top := base - sh
 	p.fill_rect(x, top, bw, sh, qc(mul(col, 0.7)))
 	p.fill_rect(x, top, bw, 2, qc(mul(hi, 1.2)))
-	var style: String = th["style"]
+	var style: String = "derelict" if _derelict else String(th["style"])
 	var kinds: Variant = SHOP_KINDS.get(style)
 	if kinds != null:
 		# Mehrere Läden nebeneinander, wenn das Haus breit genug ist
@@ -1269,7 +1315,7 @@ func _shop(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, w: float, base: fl
 		for yy in range(int(top + 4), int(base), 2):
 			p.fill_rect(x + 2, yy, w - 4, 1, qc(mul(hi, 0.65 if yy % 4 else 0.45)))
 		# Graffiti
-		var gc: Array = rng.choice([MAGENTA, CYAN, AMBER, VIOLET, CRIMSON])
+		var gc: Array = rng.choice([GREEN, CYAN, AMBER, NBLUE, RED])
 		p.set_pen(qc(mul(gc, 0.7)), 2.0)
 		var gx := x + rng.randint(4, maxi(5, int(w - 30)))
 		var ng := rng.randint(4, 7)
@@ -1702,6 +1748,86 @@ static func _in_busy(busy: Array, L: float) -> bool:
 	return false
 
 
+## Überbauten zum Durchgehen: Brücken (Pfeiler auf der anderen Straßenseite) und
+## überhängende Gebäude (Unterseite mit Neonröhren, hängenden Schildern). Lage aus
+## Procgen.span_layout (die Sim stellt Tonnen/Wracks darunter). Höhe der Unterseite in
+## Welt-Einheiten (Kamera steht bei ~141 u).
+func _spans() -> void:
+	spans = []
+	for Ld: Dictionary in Procgen.span_layout(length, seed_, zone, exit_x):
+		var rng := PyRandom.new(int(Ld["seed"]))
+		var kind: String = Ld["kind"]
+		var x0: float = Ld["x0"]
+		var x1: float = Ld["x1"]
+		var w := x1 - x0
+		var neon: Array = th["neon"]
+		var tubes := []
+		for _i in rng.randint(2, 4):
+			tubes.append(rng.choice(neon.slice(0, 4)))
+		var signs_ := []
+		if kind == "overhang":
+			for _k in rng.randint(1, 3):
+				var f := rng.uniform(0.1, 0.8)
+				var c: Array = rng.choice(neon)
+				var word: String = rng.choice(th["words"])
+				var drop := rng.randint(14, 40)
+				var sd := rng.randint(0, 999)
+				signs_.append([f, c, word, drop, sd])
+		# breite Brücken stehen auf mehreren Pfeilern
+		var fs: Array = [0.5] if w < 110 else ([0.25, 0.75] if w < 170 else [0.15, 0.5, 0.85])
+		var piers := []
+		for f: float in fs:
+			piers.append(x0 + w * f)
+		var hu := rng.uniform(146, 154) if kind == "bridge" else rng.uniform(144, 150)
+		var tt := 34.0 + w * 0.08 if kind == "bridge" else 400.0
+		var col := mul(th["building_hi"], rng.uniform(0.6, 0.85))
+		spans.append({"kind": kind, "x0": x0, "x1": x1, "hu": hu, "t": tt, "col": col, "tubes": tubes,
+				"signs": signs_, "seed": Ld["seed"], "piers": piers if kind == "bridge" else []})
+	_stable_sort(spans, func(s: Dictionary) -> float: return float(s["x0"]))
+
+
+## Kabel quer über die Straße: mittlerer Abstand (u) je Zone, Anteil Bündel
+const WIRE_GAP := [[260, 0.35], [300, 0.3], [190, 0.5], [240, 0.4], [520, 0.15]]
+
+
+## Kabel, die quer über die Straße hängen: von hoch oben an der Häuserfront über die
+## Fahrbahn bis über die Kamera hinweg, mit Durchhang. Einzeln oder als Bündel, dünn bis
+## dick. Nicht unter Brücken/Überhängen.
+func _wires() -> void:
+	var rng := PyRandom.new(seed_ * 271 + zone * 5 + 3)
+	var wg: Array = WIRE_GAP[Py.imod(zone, WIRE_GAP.size())]
+	var gap: float = wg[0]
+	var p_bundle: float = wg[1]
+	wires = []
+	var x := cam_min + rng.uniform(40, gap)
+	while x < cam_max:
+		var under := false
+		for s: Dictionary in spans:
+			if float(s["x0"]) - 30 < x and x < float(s["x1"]) + 30:
+				under = true
+				break
+		if not under:
+			var bundle := rng.random() < p_bundle
+			var n := rng.randint(2, 4) if bundle else 1
+			var base_w: float = rng.uniform(0.9, 1.6) if bundle else rng.choice([0.5, 0.7, 1.0, 1.6, 2.4])
+			var h0 := rng.uniform(150, 200)
+			var dx := rng.uniform(-60, 60)
+			var sag := rng.uniform(40, 75)
+			var strands := []
+			for j in n:
+				var dh := j * rng.uniform(1.5, 3.0)
+				var sdx := rng.uniform(-2, 2)
+				var dsag := rng.uniform(-4, 6)
+				var sw := base_w * rng.uniform(0.7, 1.2)
+				strands.append({"dh": dh, "dx": sdx, "dsag": dsag, "w": sw})
+			var h1 := h0 + rng.uniform(-10, 30)
+			var col: Array = rng.choice([[8, 9, 11], [12, 12, 14], [10, 10, 10]])
+			wires.append({"x": x, "dx": dx, "h0": h0, "h1": h1, "sag": sag, "strands": strands,
+					"col": col, "seed": rng.randint(0, 9999)})
+		x += rng.uniform(0.5, 1.5) * gap
+	_stable_sort(wires, func(w_: Dictionary) -> float: return float(w_["x"]))
+
+
 func _alley(p: QP, e: QP, fac: Layer, rng: PyRandom, x: float, bw: float, base: float) -> void:
 	# Gasse: tiefer, dunkel, Dampf, evtl. Zaun
 	p.fill_rect(x, 0, bw, base, qc(mul(th["building"], 0.45)))
@@ -1851,6 +1977,8 @@ func draw_ground(p: QP, cam: float) -> void:
 	var y0 := ground_y0
 	var rows := img.height()
 	var r := 0
+	var dsts: Array = []
+	var srcs: Array = []
 	while r < rows:
 		var band := 2 if r < rows * 0.45 else 1     # nahe am Horizont ändert sich die Skala kaum
 		band = mini(band, rows - r)
@@ -1860,5 +1988,7 @@ func draw_ground(p: QP, cam: float) -> void:
 		var wl := cam - (W * 0.5) / k
 		var sx := (wl - float(g_wmin)) * TPU
 		var sw := W / k * TPU
-		p.draw_image(Rect2(0, y, W, band), img, Rect2(sx, r, sw, band))
+		dsts.append(Rect2(0, y, W, band))
+		srcs.append(Rect2(sx, r, sw, band))
 		r += band
+	p.draw_image_rects(img, dsts, srcs)    # ein Aufruf statt ~200 draw_image

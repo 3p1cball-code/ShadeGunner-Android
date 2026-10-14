@@ -19,7 +19,9 @@ func _init() -> void:
 	var d := Save.load_()
 	_chk("load int", d["runs"] is int and d["runs"] == 3, d)
 	var s := Settings.load_()
-	_chk("defaults", s == DSettings.DEFAULTS, s)
+	var want: Dictionary = DSettings.DEFAULTS.duplicate(true)
+	want.merge(Settings.PORT_DEFAULTS, true)
+	_chk("defaults", s == want, s)
 	s["resolution"] = [1920, 1080]
 	s["lang"] = "en"
 	s["sfx"] = 0.5
