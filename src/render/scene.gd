@@ -14,7 +14,7 @@ static var dbg_ok_v := 0
 ##   -> nasser Boden (Spiegelungen, Perspektiv-Textur, Lichtkegel) -> Figuren
 ##   (Schatten, Spiegelbild, Rimlight, Augenreflex) -> Laser/Scan/Leuchtspuren
 ##   -> Regen, Vordergrund -> Glow-Pass (Leuchtschicht verkleinert/vergrößert,
-##   additiv) -> Blitz/Treffer/Blende.
+##   additiv) -> Treffer/Blende.
 ## Danach Bayer-Dither + CRT auf der GPU (CRTChain).
 ##
 ## Godot-Aufbau (setup): Im Original zeichnet frame() mit zwei QPaintern in
@@ -26,6 +26,10 @@ static var dbg_ok_v := 0
 ##     SceneEmit    W x H, transparent, jedes Frame geleert  <- Painter e
 ##     SceneSmall   W//4 x H//4   (Box-Verkleinerung von emit)
 ##     SceneTiny    W//16 x H//16 (Box-Verkleinerung von small)
+##     SceneNear    W x H, transparent  <- Painter _nq (kameranahe Ebene: Kabel, Ampeltürme)
+##     SceneNearS   W//2 x H//2 (Box-Verkleinerung -> leicht unscharf)
+##     SceneFg      W x H, transparent  <- Painter _fq (Vordergrund vor der Kamera)
+##     SceneFgS     W//3 x H//3 (Box-Verkleinerung -> Tiefenunschärfe)
 ##     SceneImg     W x H, opak, jedes Frame geleert (malt vollflaechig) <- Painter p
 ##
 ## Godot rendert Geschwister-SubViewports in Baumreihenfolge: emit -> small ->
@@ -84,6 +88,13 @@ var _fog_d := 0.6             # aktuelle Nebeldichte (atmet über die Zeit)
 var wisps: Array = []         # Nebelschwaden, die durchs Vordergrundbild ziehen
 var _reflk := 1.0             # getattr(self, "_reflk", 1.0)
 var _beam_poly: Variant = null
+var bikes: Array = []         # Radfahrer: reine Kulisse, nicht Teil der Simulation
+var doves: Array = []         # ROYs Taube (nur wenn man ihn verschont)
+var _bike_next := 12.0
+var litter: Array = []        # flatternder Müll (Zeitungen, Papier) - Kulisse
+var _gust := 6.0
+var _near: Array = []         # kameranahe Ampeltürme dieses Frames
+var _fg_e: QP = null          # Leuchtschicht während _foreground
 
 # Leistungs-Optionen (werden von den Einstellungen/game.gd gesetzt; Default = volle Pracht)
 var opt_reflections := true
@@ -104,6 +115,12 @@ var _tiny_vp: SubViewport
 var _small_tex: Texture2D
 var _tiny_tex: Texture2D
 var _first := true
+var _nq: QP                   # kameranahe, leicht unscharfe Ebene (Python: self._nb_img)
+var _fq: QP                   # Vordergrund-Ebene (Python: self._fg_img)
+var _near_vp: SubViewport
+var _near_tex: Texture2D      # verkleinert (W//2)
+var _fg_vp: SubViewport
+var _fg_tex: Texture2D        # verkleinert (W//3)
 
 
 func _init(w_: int = W, h_: int = H) -> void:
@@ -186,6 +203,29 @@ func setup(parent: Node, baker_: Baker = null) -> Texture2D:
 	parent.add_child(_tiny_vp)
 	_tiny_tex = _tiny_vp.get_texture()
 
+	# Kameranahe Ebene + Vordergrund: eigene Bilder, verkleinert und wieder vergrößert
+	# (Tiefenunschärfe). Vor dem Szenen-Viewport im Baum -> im selben Frame fertig.
+	_near_vp = _make_vp("SceneNear", w, h, true, SubViewport.CLEAR_MODE_ALWAYS)
+	var nh := Node2D.new()
+	_near_vp.add_child(nh)
+	parent.add_child(_near_vp)
+	_nq = QP.new(nh.get_canvas_item())
+	var nb := NEAR_BLUR
+	var near_small := _make_box("SceneNearS", _near_vp.get_texture(), Vector2(w, h), Py.ifloordiv(W, nb),
+		Py.ifloordiv(H, nb))
+	parent.add_child(near_small)
+	_near_tex = near_small.get_texture()
+	_fg_vp = _make_vp("SceneFg", w, h, true, SubViewport.CLEAR_MODE_ALWAYS)
+	var fh := Node2D.new()
+	_fg_vp.add_child(fh)
+	parent.add_child(_fg_vp)
+	_fq = QP.new(fh.get_canvas_item())
+	var fb := FG_BLUR
+	var fg_small := _make_box("SceneFgS", _fg_vp.get_texture(), Vector2(w, h), Py.ifloordiv(W, fb),
+		Py.ifloordiv(H, fb))
+	parent.add_child(fg_small)
+	_fg_tex = fg_small.get_texture()
+
 	# Jedes frame() malt die Szene vollflaechig neu (Himmel + Strasse sind deckend), daher
 	# darf der Viewport jedes Frame geleert werden. Das entspricht dem nicht geleerten
 	# self.img des Originals und macht ein erneutes force_draw() idempotent (kein
@@ -228,7 +268,8 @@ static func _make_box(name: String, src: Texture2D, src_size: Vector2, dw: int, 
 
 
 # --------------------------------------------------------------------- Billboards
-static func _billboard_frames(bk: Baker, brng: PyRandom, bw: int, bh: int, kind: String) -> Array:
+static func _billboard_frames(bk: Baker, brng: PyRandom, bw: int, bh: int, kind: String,
+		neon: Array = [DScene.RED, DScene.CYAN, DScene.AMBER, DScene.GREEN]) -> Array:
 	var frames: Array = []
 	if kind == "face":
 		var hair := [14, 10, 20]
@@ -289,7 +330,7 @@ static func _billboard_frames(bk: Baker, brng: PyRandom, bw: int, bh: int, kind:
 		for k in range(4):
 			var draw := func(q: QP) -> void:
 				q.fill_rect(0, 0, bw, bh, QP.rgb([30, 8, 30]))
-				var col: Array = [DScene.MAGENTA, DScene.CYAN, DScene.AMBER, DScene.VIOLET][(k + brng.randint(0, 3)) % 4]
+				var col: Array = neon[(k + brng.randint(0, 3)) % neon.size()]
 				var cc := QP.rgb(col)
 				for gy in range(3, bh - 7, 9):
 					for gx in range(3, bw - 5, 8):
@@ -324,6 +365,7 @@ func ensure_zone(zone_index: int, seed_: int, length: Variant = null) -> void:
 	if _zone_key != null and key == _zone_key:
 		return
 	_zone_key = key
+	Vehicles.set_zone(zone_index)
 	city = City.new(zone_index, float(length), seed_)
 	var th: Dictionary = city.th
 	_apply_rain()
@@ -334,7 +376,7 @@ func ensure_zone(zone_index: int, seed_: int, length: Variant = null) -> void:
 	bb_frames = []
 	for bb: Array in city.billboards:
 		var kind: String = zr.choice(["face", "logo", "kanji"])
-		bb_frames.append(_billboard_frames(baker, zr, int(bb[2]), int(bb[3]), kind))
+		bb_frames.append(_billboard_frames(baker, zr, int(bb[2]), int(bb[3]), kind, th["neon"]))
 	spinners = []
 	for _i in range(int(th["spinners"])):
 		_spawn_spinner(zr, true)
@@ -342,7 +384,13 @@ func ensure_zone(zone_index: int, seed_: int, length: Variant = null) -> void:
 	if th["blimp"]:
 		blimp = {"x": zr.uniform(0, W), "y": zr.uniform(28, 60), "ad": zr.choice(DScene.ADS), "off": 0.0}
 	_refl.clear()
+	_refl_mat.clear()
 	_last_cam = null
+	bikes = []
+	_bike_next = PyRandom.new(seed_ + 5).uniform(8.0, 25.0)
+	litter = []
+	_gust = PyRandom.new(seed_ + 6).uniform(4.0, 12.0)
+	Palette.active = Palette.zone_look(zone_index)["name"]
 
 
 func _spawn_spinner(rng_: PyRandom, initial: bool = false) -> void:
@@ -378,6 +426,11 @@ func consume(_world: Variant, events: Array) -> void:
 			fx.trauma = minf(1.0, fx.trauma + 0.6)
 		elif k == "kill":
 			fx.trauma = minf(1.0, fx.trauma + 0.25)
+		elif k == "dove":
+			var dx: float = ev[1]
+			var dd: float = ev[2]
+			doves.append({"x": dx, "d": dd, "z": Persp.figure_h(dd) / Persp.ppu(dd) * 0.55, "t": 0.0,
+					"vx": 6.0, "vz": 10.0})
 
 
 # ------------------------------------------------------------------ Frame
@@ -391,6 +444,7 @@ func frame(world: Variant, dt: float = 1.0 / 60.0, show_player: bool = true, fad
 	t_ += dt
 	var t := t_
 	var th: Dictionary = city.th
+	Palette.active = Palette.zone_look(city.zone)["name"]
 	var seed_: int = int(_wget(world, "seed", 0))
 	_reflk = 0.6 + 0.7 * float(th["rain"])     # Regen verstärkt die Spiegelung
 	var cam: float = world.camera_x if cam_override == null else cam_override
@@ -401,15 +455,26 @@ func frame(world: Variant, dt: float = 1.0 / 60.0, show_player: bool = true, fad
 		_apply_rain()
 	fx.update_rain(dt, cam_dx)
 	fx.update_steam(dt)
+	_update_bikes(dt, cam)
+	for dv: Dictionary in doves:
+		dv["t"] = float(dv["t"]) + dt
+		var tt: float = dv["t"]
+		# erst ein paar unsichere Flügelschläge, dann steigt sie steil in den Regen
+		dv["vz"] = 10.0 + 34.0 * minf(1.0, tt / 1.6)
+		dv["vx"] = 6.0 + 10.0 * sin(tt * 0.7)
+		dv["x"] = float(dv["x"]) + float(dv["vx"]) * dt
+		dv["z"] = float(dv["z"]) + float(dv["vz"]) * dt
+	doves = doves.filter(func(dv: Dictionary) -> bool: return float(dv["t"]) < 14.0)
+	_update_litter(dt, cam)
 	fx.update_combat(dt)
-	if fx.update_weather(dt, th["rain"]):
-		sfx.append(["thunder"])
 
 	# self.emit.fill(0): der Leucht-Viewport wird jedes Frame geleert.
 	var p := _p
 	var e := _e
 	p.begin()
 	e.begin()
+	_nq.begin()
+	_fq.begin()
 	if _first:      # RGB32-Bild startet schwarz (Viewport-Clearfarbe wäre grau)
 		p.fill_rect(0, 0, W, H, Color(0, 0, 0, 1))
 		_first = false
@@ -458,7 +523,13 @@ func frame(world: Variant, dt: float = 1.0 / 60.0, show_player: bool = true, fad
 		_shout_fx(p, e, world, cam, t)
 	if opt_fog:
 		_fog(p, 1, Persp.FACADE_Y - 28, 72, cam * Persp.ppu(0.0) + t * 9.0, minf(1.0, fd * 0.7))
+	_spans_back(p, e, cam, t)
+	_near = []
 	_actors(p, e, world, cam, t, show_player)
+	_near_layer(p, e, cam, t)
+	_spans_front(p, e, cam, t)
+	for dv: Dictionary in doves:
+		_draw_dove(p, e, dv, cam)
 	if dark > 0:
 		p.fill_rect(0, 0, W, H, QP.c(2, 3, 10, int(165 * dark)))
 		if opt_fx:
@@ -471,7 +542,7 @@ func frame(world: Variant, dt: float = 1.0 / 60.0, show_player: bool = true, fad
 	_patrol(p, e, world, cam, t)
 	_spinners(p, e, dt, t, true)
 	if opt_rain != "aus":
-		fx.draw_rain(p, mix(th["fog"], DScene.PALE, 0.55))
+		fx.draw_rain(p, mix(th["fog"], DScene.PALE, 0.55), _span_clip(cam))
 		_beam_rain(p)
 	if opt_fog:
 		_fog(p, 1, H - 70, 78, cam * Persp.ppu(1.15) + t * 14.0, minf(1.0, fd * 0.42))
@@ -480,8 +551,12 @@ func frame(world: Variant, dt: float = 1.0 / 60.0, show_player: bool = true, fad
 		_fog_img(p, city.bank, -30, H + 70, cam * Persp.ppu(1.0) * 0.6 + t * 7.0, minf(0.46, fd * 0.34))
 	if opt_fx:
 		_wisps(p, dt, cam)
+	_fg_e = e
 	_foreground(p, cam)
+	_fg_e = null
 	e.end()
+	_nq.end()
+	_fq.end()
 
 	# Glow-Pass: small/tiny sind die (in Baumreihenfolge vorher gerenderten)
 	# Box-Verkleinerungen der Leuchtschicht dieses Frames.
@@ -495,10 +570,6 @@ func frame(world: Variant, dt: float = 1.0 / 60.0, show_player: bool = true, fad
 	p.draw_texture(Rect2(0, 0, W, H), _tiny_tex)
 	p.set_opacity(1.0)
 	p.set_smooth(false)
-	if fx.lightning > 0:
-		p.set_opacity(fx.lightning * 0.22)
-		p.fill_rect(0, 0, W, H, QP.rgb([200, 210, 255]))
-		p.set_opacity(1.0)
 	p.set_mode(OVER)
 	if fx.hurt > 0:
 		var g := QGrad.radial(W / 2.0, H / 2.0, W * 0.7)
@@ -517,10 +588,6 @@ func frame(world: Variant, dt: float = 1.0 / 60.0, show_player: bool = true, fad
 func _sky(p: QP, e: QP, cam: float, t: float) -> void:
 	var th: Dictionary = city.th
 	p.draw_image_at(0, 0, city.sky)
-	if fx.lightning > 0:
-		p.set_opacity(fx.lightning * 0.5)
-		p.fill_rect(0, 0, W, int(Persp.FACADE_Y), QP.rgb(mix(th["cloud_lit"], [200, 200, 255], 0.5)))
-		p.set_opacity(1.0)
 	for cl: Array in city.cloud_layers:
 		var im: QImg = cl[0]
 		var speed: float = cl[1]
@@ -530,13 +597,6 @@ func _sky(p: QP, e: QP, cam: float, t: float) -> void:
 		p.draw_image_at(int(x), 0, im)
 		if x + im.width() < W:
 			p.draw_image_at(int(x + im.width()), 0, im)
-	if fx.bolt != null:
-		var pts := PackedVector2Array()
-		for pt: Array in fx.bolt:
-			pts.append(Vector2(float(pt[0]), float(pt[1])))
-		for q: QP in [p, e]:
-			q.set_pen(QP.c(230, 236, 255, 255), 1)
-			q.draw_polyline(pts)
 	_spinners(p, e, 0.0, t, null)
 
 
@@ -1243,6 +1303,8 @@ func _facade_life(p: QP, e: QP, cam: float, t: float, dt: float) -> void:
 			q.draw_ellipse(int(x) - 2, y, 4, 5)
 		p.fill_rect(int(x) - 1, y + 2, 2, 1, QP.rgb(Scene.mix(c, DScene.WHITE, 0.6)))
 	_blinks(p, e, cam, t, "fac", fac)
+	_fires(p, e, cam, t)
+	_walk_signals(p, e, cam, t)
 	# Dampf aus Lüftungen
 	for v: Array in city.vents:
 		var L: float = v[0]
@@ -1313,9 +1375,13 @@ func _street(p: QP, e: QP, cam: float, t: float) -> void:
 			p.set_mode(rm[1])
 			p.set_opacity(rm[2])
 			var hlim := mini(refl.height(), H - fy)
+			var dsts: Array = []
+			var srcs: Array = []
 			for kb in range(0, hlim, band):
 				var off := sin(t * 2.3 + kb * 0.37) * 1.2
-				p.draw_image(Rect2(0, fy + kb, W, band), refl, Rect2(-x0 - off, kb, W, band))
+				dsts.append(Rect2(0, fy + kb, W, band))
+				srcs.append(Rect2(-x0 - off, kb, W, band))
+			p.draw_image_rects(refl, dsts, srcs)
 			p.set_opacity(1.0)
 		p.set_mode(OVER)
 	# In Pfützen ist die Fahrbahn noch nasser -> Reflexion dort klar verstärkt.
@@ -1344,9 +1410,13 @@ func _street(p: QP, e: QP, cam: float, t: float) -> void:
 				p.set_mode(rm[1])
 				p.set_opacity(rm[2])
 				var hlim := mini(refl.height(), H - fy)
+				var dsts: Array = []
+				var srcs: Array = []
 				for kb in range(0, hlim, band):
 					var off := sin(t * 2.3 + kb * 0.37) * 1.2
-					p.draw_image(Rect2(0, fy + kb, W, band), refl, Rect2(-x0 - off, kb, W, band))
+					dsts.append(Rect2(0, fy + kb, W, band))
+					srcs.append(Rect2(-x0 - off, kb, W, band))
+				p.draw_image_rects(refl, dsts, srcs)
 				p.set_opacity(1.0)
 		p.restore()
 		p.set_mode(OVER)
@@ -1379,13 +1449,8 @@ func _street(p: QP, e: QP, cam: float, t: float) -> void:
 			var ry := fy + (fy - s.y - s.h)
 			if ry > H:
 				continue
-			var key := "sign%d" % s.get_instance_id()
-			var r: Variant = _refl.get(key)
-			if r == null:
-				r = City.soft_reflection(s.emit)
-				_refl[key] = r
 			p.set_opacity(minf(1.0, 0.48 * k))
-			p.draw_image(Rect2(int(x), ry, s.w, s.h * 1.9), r)
+			_draw_refl(p, int(x), ry, s.emit, s.h * 1.9)
 		p.set_opacity(1.0)
 		p.set_mode(OVER)
 	# Asphalt-Körnung noch einmal mit reduzierter Deckkraft darüber: die Reflexion
@@ -1474,18 +1539,35 @@ func _rim_for(a: Variant, _cam: float) -> Array:
 	return [city.th["rim"], 1]
 
 
-## Wet-Street-Reflexion (progressiv scharf->weich, city.soft_reflection).
-## Einmal pro Sprite gerechnet und gecacht - Rendern kostet nur ein drawImage.
-func _mirror(im: QImg) -> QImg:
-	if not opt_reflections:
-		return null
-	var r: Variant = _refl.get(im)
-	if r == null:
-		if _refl.size() > 6000:
-			_refl.clear()
-		r = City.soft_reflection(im)
-		_refl[im] = r
-	return r
+## Wet-Street-Reflexion (progressiv scharf->weich wie city.soft_reflection) - im Port als
+## Shader beim Zeichnen (shaders/reflect.gdshader). Das Original backt je Bild eine
+## Reflexion; hier kostete das ~12 SubViewports und ~10 ms je neuem Sprite-Frame (und
+## die Viewports wurden nie freigegeben). Je Bild bleibt nur ein kleines Material.
+const SH_REFLECT := preload("res://shaders/reflect.gdshader")
+var _refl_mat := {}
+
+
+func _refl_material(im: QImg) -> ShaderMaterial:
+	var m: Variant = _refl_mat.get(im)
+	if m != null:
+		return m
+	if _refl_mat.size() > 4000:
+		_refl_mat.clear()
+	var ts := im.tex.get_size()
+	var r := im.region
+	var mat := ShaderMaterial.new()
+	mat.shader = SH_REFLECT
+	mat.set_shader_parameter("reg", Vector4(r.position.x / ts.x, r.position.y / ts.y, r.end.x / ts.x, r.end.y / ts.y))
+	mat.set_shader_parameter("flip_x", 1.0 if im.mirrored else 0.0)
+	_refl_mat[im] = mat
+	return mat
+
+
+## Reflexion von im bei (x, y) zeichnen (Größe des Bildes oder dst_h hoch gestreckt).
+func _draw_refl(p: QP, x: float, y: float, im: QImg, dst_h: float = -1.0) -> void:
+	if not opt_reflections or im == null or im.tex == null:
+		return
+	p.draw_image_material(Rect2(x, y, im.width(), im.height() if dst_h < 0.0 else dst_h), im, _refl_material(im))
 
 
 ## Figuren, Fahrzeuge und Hindernisse gemeinsam nach Tiefe sortiert.
@@ -1515,6 +1597,12 @@ func _actors(p: QP, e: QP, world: Variant, cam: float, t: float, show_player: bo
 		if not o["taken"]:
 			items.append([float(o["depth"]), 4, o, idx])
 			idx += 1
+	for b: Dictionary in bikes:
+		items.append([float(b["d"]), 6, b, idx])
+		idx += 1
+	for m: Dictionary in litter:
+		items.append([float(m["d"]), 7, m, idx])
+		idx += 1
 	items.sort_custom(func(x: Array, y: Array) -> bool:
 		if x[0] == y[0]:
 			return x[3] < y[3]
@@ -1533,6 +1621,10 @@ func _actors(p: QP, e: QP, world: Variant, cam: float, t: float, show_player: bo
 			_draw_landing(p, e, obj, cam, t)
 		elif kind == 5:
 			_draw_steam(p, e, obj, cam, t)
+		elif kind == 6:
+			_draw_bike(p, e, obj, cam, t)
+		elif kind == 7:
+			_draw_litter(p, obj, cam)
 		else:
 			_draw_origami(p, e, obj, cam, t)
 
@@ -1562,7 +1654,8 @@ func _draw_actor(p: QP, e: QP, a: Variant, cam: float, t: float, lit: bool = fal
 		rim = DScene.WHITE
 		fog = 0.0
 	var outline := [4, 5, 10]
-	if not a.alive and float(a.dead_t) > 0.5:
+	var peaceful: bool = a.peaceful if a is Actor else false
+	if not a.alive and float(a.dead_t) > 0.5 and not peaceful:
 		# „Kreide“-Umriss: liegende Körper bleiben auf dem nassen Asphalt lesbar
 		outline = [150, 40, 64] if not a.is_replicant else [120, 170, 190]
 	var r: Array = Sprites.get_(a.look, a.anim, int(a.get("frame")), hgt, int(a.facing),
@@ -1580,7 +1673,7 @@ func _draw_actor(p: QP, e: QP, a: Variant, cam: float, t: float, lit: bool = fal
 	var y0 := int(gy) - ay - lift
 	if not a.alive:
 		# Lache: Menschen dunkelrot, Replikanten milchig-weiß
-		var k := minf(1.0, float(a.dead_t) / 2.5)
+		var k := 0.0 if peaceful else minf(1.0, float(a.dead_t) / 2.5)
 		if k > 0.05:
 			var rw := hgt * (0.3 + 0.6 * k)
 			var px_ := cx + (meta["head"] as Vector2).x * 0.55 - rw / 2
@@ -1613,7 +1706,7 @@ func _draw_actor(p: QP, e: QP, a: Variant, cam: float, t: float, lit: bool = fal
 	p.draw_ellipse(cx - sw / 2, gy - sw * 0.07, sw, sw * 0.16)
 	# Spiegelbild im nassen Asphalt
 	p.set_opacity(minf(1.0, 0.46 * _reflk))
-	p.draw_image_at(x0, int(gy) + lift - (im.height() - 1 - ay), _mirror(im))
+	_draw_refl(p, x0, int(gy) + lift - (im.height() - 1 - ay), im)
 	p.set_opacity(1.0)
 	if a.player:
 		var rw := hgt * 0.5
@@ -1720,7 +1813,7 @@ func _draw_vehicle(p: QP, e: QP, v: Dictionary, cam: float, t: float) -> void:
 	p.set_brush(QP.c(0, 0, 0, 130))
 	p.draw_ellipse(cx - float(v["L"]) * k * 0.55, gy - 3 * k, float(v["L"]) * k * 1.1, 5 * k)
 	p.set_opacity(minf(1.0, 0.5 * _reflk))
-	p.draw_image_at(x0, int(gy) - (im.height() - 1 - ay), _mirror(im))
+	_draw_refl(p, x0, int(gy) - (im.height() - 1 - ay), im)
 	p.set_opacity(1.0)
 	p.draw_image_at(x0, y0, im)
 	e.draw_image_at(x0, y0, em)
@@ -1839,7 +1932,7 @@ func _draw_parked(p: QP, e: QP, o: Dictionary, cam: float, t: float) -> void:
 	p.set_brush(QP.c(0, 0, 0, 140))
 	p.draw_ellipse(cx - float(o["w"]) * k * 1.1, gy - 3 * k, float(o["w"]) * k * 2.2, 5 * k)
 	p.set_opacity(minf(1.0, 0.5 * _reflk))
-	p.draw_image_at(x0, int(gy) - (im.height() - 1 - ay), _mirror(im))
+	_draw_refl(p, x0, int(gy) - (im.height() - 1 - ay), im)
 	p.set_opacity(1.0)
 	p.draw_image_at(x0, y0, im)
 	e.set_opacity(0.12)
@@ -1949,6 +2042,12 @@ func _draw_obstacle(p: QP, e: QP, o: Dictionary, cam: float, t: float) -> void:
 	if o["kind"] == "parked":
 		_draw_parked(p, e, o, cam, t)
 		return
+	if o["kind"] == "tower":
+		if float(o["d"]) > 1.0:
+			_near.append(o)            # vor der Kamera: eigene, leicht unscharfe Ebene
+		else:
+			_draw_tower(p, e, o, cam, t)
+		return
 	var d: float = o["d"]
 	var k := Persp.ppu(d)
 	var cx := Persp.screen_x(float(o["x"]), d, cam)
@@ -1966,12 +2065,13 @@ func _draw_obstacle(p: QP, e: QP, o: Dictionary, cam: float, t: float) -> void:
 	p.set_brush(QP.c(0, 0, 0, 120))
 	p.draw_ellipse(cx - float(o["w"]) * k * 1.1, gy - 2 * k, float(o["w"]) * k * 2.2, 4 * k)
 	p.set_opacity(minf(1.0, 0.46 * _reflk))
-	p.draw_image_at(x0, int(gy) - (im.height() - 1 - ay), _mirror(im))
+	_draw_refl(p, x0, int(gy) - (im.height() - 1 - ay), im)
 	p.set_opacity(1.0)
 	p.draw_image_at(x0, y0, im)
 	e.draw_image_at(x0, y0, em)
 	var kind: String = o["kind"]
 	var light: Variant = null
+	k = k * float(Vehicles.OB_SCALE.get(kind, 1.0))      # Zeichenmaßstab wie im Bild
 	if kind == "barrier" and Py.imod(int(t * 2.5 + float(o["seed"])), 2) == 0:
 		for q: QP in [p, e]:
 			q.fill_rect(cx - 1 * k, gy - 12 * k, 2 * k + 1, 2 * k + 1, QP.rgb(DScene.AMBER))
@@ -2079,7 +2179,7 @@ func _draw_landing(p: QP, e: QP, P: Variant, cam: float, t: float) -> void:
 	var ayg: int = r[4]
 	if alt < 0.25:
 		p.set_opacity(minf(1.0, 0.5 * _reflk) * (1 - alt * 4))
-		p.draw_image_at(int(x) - ax, int(gy) - (im.height() - 1 - ayg) + int(gy - yg), _mirror(im))
+		_draw_refl(p, int(x) - ax, int(gy) - (im.height() - 1 - ayg) + int(gy - yg), im)
 		p.set_opacity(1.0)
 	# Abwind: heller Luftschleier unter dem Rumpf + Gischt am Boden
 	var wash: float = P.get("wash", 0.0)
@@ -2305,31 +2405,885 @@ func _combat(p: QP, e: QP, world: Variant, cam: float, _t: float) -> void:
 
 
 # ------------------------------------------------------------------ Vordergrund
-## Säulen/Masten sehr nah an der Kamera (Tiefe 1.35) und Kabel oben.
+## Vordergrund je Zone: [Art, Gewicht]. Nur DÜNNE Dinge direkt vor der Kamera - Kabel,
+## Masten, Rohre, Lampionschnüre. Die dicken Säulen stehen auf der anderen Straßenseite.
+const FG_KINDS := [
+	[["cable", 4], ["cables", 4], ["pole", 2], ["pipe", 2], ["none", 1]],
+	[["cable", 3], ["cables", 3], ["pole", 3], ["lanterns", 1], ["none", 1]],
+	[["cables", 4], ["lanterns", 4], ["pole", 2], ["cable", 2], ["none", 1]],
+	[["cable", 3], ["pipe", 3], ["pole", 2], ["cables", 3], ["none", 1]],
+	[["pole", 2], ["cable", 2], ["none", 4]],
+]
+const FG_DEPTH := 1.9           # sehr nah an der Kamera -> zieht schnell vorbei
+const FG_SPACING := 190.0
+const FG_BLUR := 3              # Unschärfe: Faktor des Herunterskalierens
+const NEAR_BLUR := 2            # Unschärfe der kameranahen Ebene
+const WIRE_SHARP := 1.15        # Kabelstücke ab dieser Tiefe kommen in die unscharfe Ebene
+
+
+## Dünne Requisiten direkt vor der Kamera, außerhalb der Schärfeebene: Kabel mit losen,
+## pendelnden Enden, Masten mit Ampel/Schild, Rohre, Lampionschnüre. Eigene Ebene, die
+## vor dem Einsetzen weichgezeichnet wird (Tiefenunschärfe).
 func _foreground(p: QP, cam: float) -> void:
-	var d := 1.35
+	if not _fg_draw(_fq, cam):
+		return
+	p.save()
+	p.reset_transform()
+	p.set_mode(OVER)
+	p.set_opacity(1.0)
+	p.set_smooth(true)
+	p.draw_texture(Rect2(0, 0, W, H), _fg_tex)
+	p.restore()
+
+
+func _fg_draw(p: QP, cam: float) -> bool:
+	var d := FG_DEPTH
 	var k := Persp.ppu(d)
-	var spacing := 620.0
+	var spacing := FG_SPACING
+	var t := t_
+	var th: Dictionary = city.th
+	var z := Py.imod(city.zone, FG_KINDS.size())
+	var kinds: Array = FG_KINDS[z]
+	var tot := 0.0
+	for kw: Array in kinds:
+		tot += float(kw[1])
+	var dk := [5, 7, 9]
+	var rim := mul(th["rim"], 0.3)
+	var e := _fg_e
+	var drawn := false
 	var first := int(floor((cam - W / k) / spacing)) - 1
-	for i in range(first, first + 4):
-		var wx := i * spacing + 230 * Scene._hash(i, 3)
+	for i in range(first, first + 7):
+		var wx := i * spacing + 120 * Scene._hash(i, 3)
 		var x := Persp.screen_x(wx, d, cam)
-		if x < -40 or x > W + 40:
+		if x < -300 or x > W + 300:
 			continue
-		var kind := Scene._hash(i, 9)
-		if kind < 0.5:
-			var ww := 14
-			p.fill_rect(int(x), 0, ww, H, QP.rgb([5, 6, 10]))
-			p.fill_rect(int(x) + ww - 2, 0, 1, H, QP.rgb(Scene.mul(city.th["rim"], 0.35)))
-			p.fill_rect(int(x), int(H * 0.55), ww, 3, QP.rgb(Scene.mul(city.th["neon"][0], 0.5)))
-		else:
-			# Hängendes Kabel quer durchs Bild
-			p.set_pen(QP.rgb([8, 9, 14]), 2)
-			var y0 := 10 + 18 * Scene._hash(i, 5)
+		var r := Scene._hash(i, 9 + z) * tot
+		var kind: String = kinds[-1][0]
+		for kw: Array in kinds:
+			if r < float(kw[1]):
+				kind = kw[0]
+				break
+			r -= float(kw[1])
+		if kind == "none":
+			continue
+		drawn = true
+		var sway := sin(t * 0.9 + i * 1.7) * 3.0
+		if kind in ["cable", "cables", "lanterns"]:
+			var n := 1 if kind == "cable" else (2 + int(Scene._hash(i, 4) * 2))
+			for j in n:
+				var y0 := -4 + 40 * Scene._hash(i, 5 + j)
+				var y1 := -4 + 40 * Scene._hash(i, 15 + j)
+				var span := 320 + 200 * Scene._hash(i, 25 + j)
+				var sag := 18 + 34 * Scene._hash(i, 35 + j)
+				var xa := x - span / 2
+				var xb := x + span / 2
+				var pts := PackedVector2Array()
+				var wds := PackedFloat32Array()
+				var wpen := 5.0 if j == 0 else 3.0
+				for s_ in 17:
+					var u := s_ / 16.0
+					pts.append(Vector2(xa + (xb - xa) * u, y0 + (y1 - y0) * u + (sag + sway) * 4 * u * (1 - u)))
+					wds.append(wpen)
+				p.draw_strip(pts, wds, QP.rgb(dk))
+				if kind == "lanterns" and j == 0:
+					p.set_no_pen()
+					var neon: Array = th["neon"]
+					for s_ in range(2, 15, 2):
+						var q_ := pts[s_]
+						var c: Array = neon[int(Scene._hash(i * 31 + s_, 2) * neon.size())]
+						var lit := dark < 0.4 and Scene._hash(int(t * 3) + s_, i) > 0.04
+						var qs: Array = [e, p] if lit and e != null else [p]
+						for q: QP in qs:
+							q.set_no_pen()
+							q.set_brush(QP.rgb(c if lit else mul(c, 0.3)))
+							q.draw_ellipse(q_.x - 6, q_.y + 2, 12, 15)
+				# loses Ende, pendelt im Wind
+				if j == 0 and Scene._hash(i, 45) < 0.7:
+					var q0 := pts[int(4 + 8 * Scene._hash(i, 46))]
+					var ln := 40 + 90 * Scene._hash(i, 47)
+					var ang := sin(t * 1.3 + i) * 0.14
+					p.set_pen(QP.rgb(dk), 3)
+					p.draw_line(q0.x, q0.y, q0.x + sin(ang) * ln, q0.y + cos(ang) * ln)
+			p.set_no_pen()
+		elif kind == "pole":
+			var pw := 10
+			p.fill_rect(int(x), 0, pw, H, QP.rgb(dk))
+			p.fill_rect(int(x) + pw - 2, 0, 2, H, QP.rgb(rim))
+			var hy := int(H * (0.14 + 0.14 * Scene._hash(i, 6)))
+			if Scene._hash(i, 7) < 0.5:       # Ampelkopf
+				p.fill_rect(int(x) - 8, hy, 26, 50, QP.rgb([12, 12, 14]))
+				var st := Py.imod(int((t + Scene._hash(i, 8) * 9) / 3.0), 3)
+				var pal: Array = Palette.zone_look(city.zone)["pal"]
+				var lc: Array = [pal[6], th["neon"][0], th["neon"][-1]]
+				for kk_ in 3:
+					var c: Array = lc[kk_]
+					var on := kk_ == st and dark < 0.4
+					var qs: Array = [p, e] if on and e != null else [p]
+					for q: QP in qs:
+						q.fill_rect(int(x) - 3, hy + 4 + kk_ * 15, 14, 11, QP.rgb(c if on else mul(c, 0.2)))
+			else:                       # Straßenschild
+				var word: String = ["NO STOPPING", "SECTOR 4", "DANGER", "ONE WAY", "CROSS NOW"][int(Scene._hash(i, 10) * 5)]
+				var tw := Pixfont.text_width(word, 2)
+				p.fill_rect(int(x) - Py.ifloordiv(tw, 2) - 6, hy, tw + 12, 22, QP.rgb([14, 20, 24]))
+				Pixfont.draw(p, int(x) - Py.ifloordiv(tw, 2), hy + 4, word, mul(th["neon"][0], 0.5), 2, null)
+			p.set_pen(QP.rgb(dk), 3)
+			p.draw_line(x + 4, hy - 14, x + 240, 10 + sway)
+			p.set_no_pen()
+		elif kind == "pipe":
+			var pw := 12
+			var bot := int(H * (0.22 + 0.18 * Scene._hash(i, 11)))
+			p.fill_rect(int(x), 0, pw, bot, QP.rgb([10, 12, 14]))
+			p.fill_rect(int(x) + 2, 0, 2, bot, QP.rgb(rim))
+			for yy in range(20, bot, 46):
+				p.fill_rect(int(x) - 4, yy, pw + 8, 6, QP.rgb([18, 20, 22]))
+			p.fill_rect(int(x) - 5, bot, pw + 10, 8, QP.rgb([12, 14, 16]))
+			var ph := Py.mod(t * 1.4 + Scene._hash(i, 12), 1.0)
+			p.fill_rect(int(x) + 5, bot + 8 + ph * (H - bot), 2, 6, QP.rgb(mix(th["fog"], DScene.PALE, 0.6), 160))
+	return drawn
+
+
+# ------------------------------------------------------------------ Feuer / Ampeln (Fassade)
+## Feuertonnen an der gegenüberliegenden Häuserfront: Flammenzungen + Lichthof.
+func _fires(p: QP, e: QP, cam: float, t: float) -> void:
+	var fac: City.Layer = city.facade
+	var halos: Array = []
+	for f: Array in city.fires:
+		var L: float = f[0]
+		var y: float = f[1]
+		var s: float = f[2]
+		var sd: int = f[3]
+		var x := fac.screen_x(L, cam)
+		if x < -30 or x > W + 30:
+			continue
+		for q: QP in [p, e]:
+			for i in 5:
+				var n := Scene._hash(int(t * 11) + i * 7, sd + i)
+				var hx := x + (i - 2) * 1.3 + sin(t * 9 + i * 2.1 + sd) * 0.8
+				var hh := s * (4 + 9 * n) * (1.0 if i in [1, 2, 3] else 0.6)
+				var col: Array = [255, 236, 170] if i == 2 else ([255, 150, 40] if i % 2 else [230, 70, 30])
+				q.set_no_pen()
+				q.set_brush(QP.rgb(col))
+				q.draw_polygon(PackedVector2Array([Vector2(hx - 1.6, y + 1), Vector2(hx + 1.6, y + 1),
+					Vector2(hx + sin(t * 13 + i) * 1.2, y - hh)]))
+		if Scene._hash(int(t * 7), sd) < 0.18:      # Funke
+			var fy_ := y - 6 - 18 * Scene._hash(int(t * 7) + 1, sd)
+			for q: QP in [p, e]:
+				q.fill_rect(int(x + 6 * (Scene._hash(int(t * 7) + 2, sd) - 0.5)), int(fy_), 1, 1, QP.rgb([255, 200, 120]))
+		halos.append([x, y - 4, 26 + 4 * sin(t * 7 + sd)])
+	if not halos.is_empty():
+		p.set_mode(PLUS)
+		for ha: Array in halos:
+			var hx: float = ha[0]
+			var hy: float = ha[1]
+			var r: float = ha[2]
+			var g := QGrad.radial(hx, hy, r)
+			g.set_color_at(0, QP.c(255, 140, 50, 70))
+			g.set_color_at(0.5, QP.c(255, 110, 40, 22))
+			g.set_color_at(1, QP.c(0, 0, 0, 0))
+			p.fill_rect(hx - r, hy - r, 2 * r, 2 * r, g)
+		p.set_mode(OVER)
+
+
+# 7x7-Piktogramme wie im Film: Pfeil nach oben (grün) und die rote Hand
+const _ARROW := ["...#...", "..###..", ".#####.", "#######", "..###..", "..#.#..", "..###.."]
+const _HAND := ["#.#.#..", "#.#.#.#", "#.#.#.#", "#######", "######.", ".#####.", "..###.."]
+
+
+## Ein Ampelpaar (grüner Pfeil / rote Hand) bei bx,y; sz = Feldgröße in Pixeln.
+func _walk_icon(p: QP, e: QP, bx: float, y: float, sz: float, t: float, ph: float) -> void:
+	var ph_t := Py.mod(t + ph, 9.0)
+	var go := ph_t < 4.0
+	var blink := not go and ph_t > 7.6 and Py.imod(int(t * 4), 2) == 0
+	var cell := sz / 8.0
+	var icons := [[_ARROW, [40, 200, 150], go], [_HAND, [236, 70, 52], not go and not blink]]
+	for k in 2:
+		var icon: Array = icons[k][0]
+		var col: Array = icons[k][1]
+		var lit: bool = icons[k][2]
+		var x0 := bx + k * (sz + cell)
+		if dark > 0.4:
+			lit = false
+		var fill: Array = col if lit else mul(col, 0.3)
+		var qs: Array = [p, e] if lit else [p]
+		for q: QP in qs:
+			q.fill_rect(x0, y, sz, sz + cell, QP.rgb(fill))
+		var ink := QP.rgb([10, 12, 12] if lit else mul(col, 0.12))
+		var cw := maxf(1.0, cell)
+		for r in 7:
+			var row: String = icon[r]
+			for c_ in 7:
+				if row.unicode_at(c_) == 35:       # "#"
+					p.fill_rect(x0 + (c_ + 0.5) * cell, y + (r + 1) * cell, cw, cw, ink)
+
+
+## Ampelturm als freistehendes Objekt (Schatten, Spiegelung, Umriss, Ampel live).
+func _draw_tower(p: QP, e: QP, o: Dictionary, cam: float, t: float) -> void:
+	var d: float = o["d"]
+	var k := Persp.ppu(d)
+	var cx := Persp.screen_x(float(o["x"]), d, cam)
+	var sc := k / Persp.FACADE_PPU * float(o.get("size", 1.0))
+	if cx < -45 * sc or cx > W + 45 * sc:
+		return
+	var gy := Persp.ground_y(d)
+	var s := Py.round(sc * 8) / 8.0
+	var hit := Props.tower_sprite(int(o["seed"]), s, city.th)
+	if hit.is_empty():
+		return
+	var im: QImg = hit[0]
+	var em: QImg = hit[1]
+	var ax: int = hit[2]
+	var ay: int = hit[3]
+	var walks_: Array = hit[4]
+	var blinks_: Array = hit[5]
+	var x0 := int(cx) - ax
+	var y0 := int(gy) - ay
+	p.set_no_pen()
+	p.set_brush(QP.c(0, 0, 0, 120))
+	p.draw_ellipse(cx - 16 * s, gy - 2 * s, 32 * s, 4 * s)
+	if gy < H:
+		p.set_opacity(minf(1.0, 0.4 * _reflk))
+		_draw_refl(p, x0, int(gy) - (im.height() - 1 - ay), im)
+		p.set_opacity(1.0)
+	p.draw_image_at(x0, y0, im)
+	e.draw_image_at(x0, y0, em)
+	for wk: Array in walks_:
+		_walk_icon(p, e, cx + float(wk[0]) * s, gy + float(wk[1]) * s, float(wk[3]) * s, t, float(wk[2]))
+	for bl: Array in blinks_:
+		if sin(t * 2.2 + float(bl[4]) * 2.1) > 0.55 and dark < 0.4:
+			var bx := cx + float(bl[1]) * s
+			var by := gy + float(bl[2]) * s
+			for q: QP in [p, e]:
+				q.fill_rect(bx - s, by - s, 2 * s, 2 * s, QP.rgb(bl[3]))
+
+
+## Kabel quer über die Straße (hinten scharf, vorn leicht unscharf) und die kameranahen
+## Ampeltürme - beide in einer eigenen, weichgezeichneten Ebene.
+func _near_layer(p: QP, e: QP, cam: float, t: float) -> void:
+	var wires := _wire_segments(cam, t)
+	if wires.is_empty() and _near.is_empty():
+		return
+	var q := _nq
+	q.reset_transform()
+	q.translate(p.transform().origin.x, p.transform().origin.y)
+	for o: Dictionary in _near:
+		_draw_tower(q, e, o, cam, t)
+	var rim: Array = city.th["rim"]
+	var hl := QP.c(rim[0], rim[1], rim[2], 60)
+	for wseg: Array in wires:
+		var pts: PackedVector2Array = wseg[0]
+		var wd: PackedFloat32Array = wseg[1]
+		var col := QP.rgb(wseg[2])
+		var near: Array = wseg[3]
+		# Läufe gleicher Ebene (scharf/unscharf) als ein Band bzw. eine Linie
+		var a := 0
+		var nseg := pts.size() - 1
+		while a < nseg:
+			var b := a
+			while b + 1 < nseg and near[b + 1] == near[a]:
+				b += 1
+			var tgt: QP = q if near[a] else p
+			var run := pts.slice(a, b + 2)
+			var rw := PackedFloat32Array()
+			var thick := false
+			for i in range(a, b + 2):
+				var wi := maxf(1.0, wd[mini(i, nseg - 1)])
+				rw.append(wi)
+				thick = thick or wi > 1.0
+			if thick:
+				tgt.draw_strip(run, rw, col)
+			else:
+				tgt.set_pen(col, 1.0)
+				tgt.draw_polyline(run)
+			# Streiflicht oben: liest sich gegen den Himmel
+			var hl_pts := PackedVector2Array()
+			for i in range(a, b + 1):
+				if wd[i] > 1.6:
+					var off := Vector2(0, -wd[i] * 0.45)
+					if hl_pts.is_empty():
+						hl_pts.append(pts[i] + off)
+					hl_pts.append(pts[i + 1] + off)
+				elif not hl_pts.is_empty():
+					tgt.set_pen(hl, 1.0)
+					tgt.draw_polyline(hl_pts)
+					hl_pts = PackedVector2Array()
+			if hl_pts.size() > 1:
+				tgt.set_pen(hl, 1.0)
+				tgt.draw_polyline(hl_pts)
+			a = b + 1
+	p.set_no_pen()
+	q.set_no_pen()
+	p.save()
+	p.reset_transform()
+	p.set_mode(OVER)
+	p.set_opacity(1.0)
+	p.set_smooth(true)
+	p.draw_texture(Rect2(0, 0, W, H), _near_tex)
+	p.restore()
+
+
+## Bildschirm-Polylinien der Querkabel: [punkte, breiten, farbe, nah-flags].
+func _wire_segments(cam: float, t: float) -> Array:
+	var out: Array = []
+	var ws: Array = city.wires
+	if ws.is_empty():
+		return out
+	var half := W / Persp.ppu(-0.075) * 0.5
+	var lo := cam - half - 120
+	var hi := cam + half + 120
+	var xs: Array = []
+	for wi: Dictionary in ws:
+		xs.append(float(wi["x"]))
+	var i0 := City.bisect_left(xs, lo)
+	var n := 28 if opt_quality == "hoch" else (20 if opt_quality == "mittel" else 14)
+	var d_end := 2.4
+	for wi in range(i0, ws.size()):
+		var w_: Dictionary = ws[wi]
+		if float(w_["x"]) > hi:
+			break
+		var sway := sin(t * 0.6 + float(w_["seed"])) * 3.0
+		var h0: float = w_["h0"]
+		var h1: float = w_["h1"]
+		var sag: float = w_["sag"]
+		for st: Dictionary in w_["strands"]:
 			var pts := PackedVector2Array()
-			for j in range(21):
-				pts.append(Vector2(x - 200 + j * 20, y0 + 26 * sin(PI * float(j) / 20)))
-			p.draw_polyline(pts)
+			var wd := PackedFloat32Array()
+			var near: Array = []
+			for j in n + 1:
+				var u := float(j) / n
+				var d := -0.075 + (d_end + 0.075) * u
+				var hgt := h0 + (h1 - h0) * u - (sag + float(st["dsag"]) + sway) * 4 * u * (1 - u) + float(st["dh"])
+				var k := Persp.ppu(d)
+				var x := Persp.screen_x(float(w_["x"]) + float(w_["dx"]) * u + float(st["dx"]), d, cam)
+				var y := Persp.ground_y(d) - hgt * k
+				pts.append(Vector2(x, y))
+				wd.append(float(st["w"]) * k)
+				near.append(d > WIRE_SHARP)
+				if y < -30 and u > 0.5:
+					break
+			if pts.size() > 1:
+				out.append([pts, wd, w_["col"], near])
+	return out
+
+
+## Fußgängerampeln der Ampeltürme: grünes Feld mit Pfeil / rotes Feld mit Hand, im
+## Wechsel; das jeweils andere Feld glimmt nur.
+func _walk_signals(p: QP, e: QP, cam: float, t: float) -> void:
+	var fac: City.Layer = city.facade
+	for wk: Array in city.walks:
+		var x := int(fac.screen_x(float(wk[0]), cam))
+		if -24 <= x and x <= W + 24:
+			_walk_icon(p, e, x, float(wk[1]), float(wk[3]), t, float(wk[2]))
+
+
+# ------------------------------------------------------------------ Überbauten
+const D_FAR := Config.FACADE_DEPTH
+const D_NEAR := 1.7
+
+
+static func _pt(x: float, d: float, hh: float, cam: float) -> Vector2:
+	return Vector2(Persp.screen_x(x, d, cam), Persp.ground_y(d) - hh * Persp.ppu(d))
+
+
+static func _hull(pts: Array) -> PackedVector2Array:
+	var pa := PackedVector2Array()
+	for q: Vector2 in pts:
+		pa.append(Vector2(snappedf(q.x, 0.01), snappedf(q.y, 0.01)))
+	var hull := Geometry2D.convex_hull(pa)
+	if hull.size() > 1 and hull[0] == hull[hull.size() - 1]:
+		hull.remove_at(hull.size() - 1)
+	return hull
+
+
+func _spans_on(cam: float) -> Array:
+	var out: Array = []
+	for s: Dictionary in city.spans:
+		var a := minf(Persp.screen_x(float(s["x0"]), D_NEAR, cam), Persp.screen_x(float(s["x0"]), D_FAR, cam))
+		var b := maxf(Persp.screen_x(float(s["x1"]), D_NEAR, cam), Persp.screen_x(float(s["x1"]), D_FAR, cam))
+		if b > -30 and a < W + 30:
+			out.append(s)
+	return out
+
+
+## Bildschirm-Polygon des Raums unter dem Überbau (trocken, dunkler).
+func _span_volume(s: Dictionary, cam: float) -> PackedVector2Array:
+	var pts: Array = []
+	for x: float in [float(s["x0"]), float(s["x1"])]:
+		for d: float in [D_FAR, D_NEAR]:
+			for hh: float in [0.0, float(s["hu"])]:
+				pts.append(_pt(x, d, hh, cam))
+	return _hull(pts)
+
+
+## Trockene Bereiche (Raum unter dem Überbau + Baukörper) als Polygone - dort kein Regen.
+func _span_clip(cam: float) -> Array:
+	var out: Array = []
+	for s: Dictionary in _spans_on(cam):
+		out.append(_span_volume(s, cam))
+		var pts: Array = []
+		for x: float in [float(s["x0"]), float(s["x1"])]:
+			for d: float in [D_FAR, D_NEAR]:
+				for hh: float in [float(s["hu"]), float(s["hu"]) + float(s["t"])]:
+					pts.append(_pt(x, d, hh, cam))
+		out.append(_hull(pts))
+	return out
+
+
+## Brücken / überhängende Gebäude: Schatten am Boden, Pfeiler, Baukörper, Lichter.
+func _spans_back(p: QP, e: QP, cam: float, t: float) -> void:
+	var th: Dictionary = city.th
+	var rim: Array = th["rim"]
+	for s: Dictionary in _spans_on(cam):
+		var x0: float = s["x0"]
+		var x1: float = s["x1"]
+		var hu: float = s["hu"]
+		var T: float = s["t"]
+		var col: Array = s["col"]
+		var bridge: bool = s["kind"] == "bridge"
+		p.set_no_pen()
+		# Schatten auf Gehweg/Fahrbahn und an der Hauswand darunter
+		var sh := 150 if bridge else 120
+		p.set_brush(QP.c(0, 0, 0, sh))
+		p.draw_polygon(PackedVector2Array([_pt(x0, D_FAR, 0, cam), _pt(x1, D_FAR, 0, cam), _pt(x1, 1.3, 0, cam),
+			_pt(x0, 1.3, 0, cam)]))
+		p.draw_polygon(PackedVector2Array([_pt(x0, D_FAR, hu, cam), _pt(x1, D_FAR, hu, cam),
+			_pt(x1, D_FAR, 0, cam), _pt(x0, D_FAR, 0, cam)]))
+		# Pfeiler (Brücke) auf der anderen Straßenseite
+		for pier: float in s["piers"]:
+			var d := -0.035
+			var k := Persp.ppu(d)
+			var xp := Persp.screen_x(pier, d, cam)
+			var pw := 20 * k
+			var gy := Persp.ground_y(d)
+			var top := gy - hu * k
+			var g := QGrad.linear(0, top, 0, gy)
+			g.set_color_at(0, QP.rgb(mul(col, 0.6)))
+			g.set_color_at(1, QP.rgb(mul(col, 1.5)))
+			p.fill_rect(xp - pw / 2, top, pw, gy - top, g)
+			e.fill_rect(xp - pw / 2, top, pw, gy - top, QP.c(0, 0, 0))
+			p.fill_rect(xp - pw / 2, top, 1, gy - top, QP.rgb(mul(rim, 0.45)))
+			p.fill_rect(xp + pw / 2 - 3, top, 3, gy - top, QP.rgb(mul(col, 0.5)))
+			p.fill_rect(xp - pw / 2 - 2, gy - 6, pw + 4, 6, QP.rgb(mul(col, 1.2)))
+			for yy in range(int(top) + 8, int(gy) - 8, 14):
+				p.fill_rect(xp - pw / 2 + 1, yy, pw - 4, 1, QP.rgb(mul(col, 0.8)))
+		# Baukörper
+		var corners: Array = []
+		for x: float in [x0, x1]:
+			for d: float in [D_FAR, D_NEAR]:
+				for hh: float in [hu, hu + T]:
+					corners.append(_pt(x, d, hh, cam))
+		var hull := _hull(corners)
+		var yb := _pt(x0, D_FAR, hu, cam).y
+		var lit := mix(col, rim, 0.22)
+		var g2 := QGrad.linear(0, yb - 70, 0, yb)
+		g2.set_color_at(0, QP.rgb(mul(col, 0.45)))
+		g2.set_color_at(0.75, QP.rgb(col))
+		g2.set_color_at(1, QP.rgb(lit))
+		p.set_brush(g2)
+		p.draw_polygon(hull)
+		e.set_no_pen()
+		e.set_brush(QP.c(0, 0, 0))                 # verdeckt das Leuchten dahinter
+		e.draw_polygon(hull)
+		# sichtbare Stirnseite
+		for xv: Array in [[x0, cam < x0], [x1, cam > x1]]:
+			if not xv[1]:
+				continue
+			var x: float = xv[0]
+			var fpts: Array = []
+			for d: float in [D_FAR, D_NEAR]:
+				for hh: float in [hu, hu + T]:
+					fpts.append(_pt(x, d, hh, cam))
+			var face := _hull(fpts)
+			p.set_brush(QP.rgb(mul(col, 0.8)))
+			p.draw_polygon(face)
+			if bridge:
+				# Fachwerkträger zwischen Unter- und Obergurt
+				p.set_pen(QP.rgb(mul(lit, 0.8)), 1.0)
+				var dd := D_FAR
+				var up := true
+				while dd < D_NEAR:
+					var d2 := dd + 0.09
+					p.draw_line_v(_pt(x, dd, hu if up else hu + T, cam), _pt(x, d2, hu + T if up else hu, cam))
+					p.draw_line_v(_pt(x, d2, hu, cam), _pt(x, d2, hu + T, cam))
+					dd = d2
+					up = not up
+				p.set_pen(QP.rgb(mul(rim, 0.7)), 1.0)
+				p.draw_line_v(_pt(x, D_FAR, hu + T, cam), _pt(x, D_NEAR, hu + T, cam))
+				p.set_no_pen()
+				for k in 6:            # Geländerleuchten
+					var q_ := _pt(x, D_FAR + 0.15 + k * 0.22, hu + T + 2, cam)
+					for q: QP in [p, e]:
+						q.fill_rect(q_.x - 1, q_.y - 1, 2, 2, QP.rgb(DScene.AMBER))
+			else:
+				# Stirnwand des Überhangs: Fensterreihen in die Tiefe
+				var wins: Array = city.th["win"]
+				var rr := PyRandom.new(int(s["seed"]))
+				for row in 6:
+					var hh := hu + 14 + row * 16
+					var dd := D_FAR + 0.04
+					while dd < D_NEAR - 0.1:
+						var a := _pt(x, dd, hh, cam)
+						var b := _pt(x, dd + 0.05, hh + 7, cam)
+						var on := rr.random() < 0.35
+						var c: Array = mul(wins[rr.randrange(wins.size())][0], 0.6) if on else mul(col, 0.45)
+						var poly := PackedVector2Array([a, _pt(x, dd + 0.05, hh, cam), b, _pt(x, dd, hh + 7, cam)])
+						p.set_brush(QP.rgb(c))
+						p.draw_polygon(poly)
+						if on:
+							e.set_brush(QP.rgb(mul(c, 0.5)))
+							e.draw_polygon(poly)
+						dd += 0.09
+			p.set_pen(QP.rgb(mul(rim, 0.8)), 1.0)
+			p.draw_line_v(_pt(x, D_FAR, hu, cam), _pt(x, D_NEAR, hu, cam))
+			p.set_no_pen()
+		# Unterkante zur Straße hin
+		p.set_pen(QP.rgb(mul(rim, 0.5)), 1.0)
+		p.draw_line_v(_pt(x0, D_FAR, hu, cam), _pt(x1, D_FAR, hu, cam))
+		p.set_no_pen()
+		_span_lights(p, e, s, cam, t)
+
+
+func _span_lights(p: QP, e: QP, s: Dictionary, cam: float, t: float) -> void:
+	var x0: float = s["x0"]
+	var x1: float = s["x1"]
+	var hu: float = s["hu"]
+	var w_ := x1 - x0
+	var dk := dark > 0.4
+	var pools: Array = []
+	if s["kind"] == "bridge":
+		# Natriumlampen an kurzen Abhängern unter dem Deck
+		for f: float in [0.3, 0.7]:
+			var d := 0.12
+			var x := x0 + w_ * f
+			var top := _pt(x, d, hu, cam)
+			var lamp := _pt(x, d, hu - 16, cam)
+			p.set_pen(QP.rgb([14, 14, 16]), 1.0)
+			p.draw_line_v(top, lamp)
+			p.set_no_pen()
+			var c := [255, 160, 70]
+			if not dk:
+				for q: QP in [p, e]:
+					q.fill_rect(lamp.x - 2, lamp.y, 5, 2, QP.rgb(c))
+				pools.append([x, d, c, 0.9])
+		# rote Positionslichter an der Kante
+		for k in 4:
+			if Py.imod(int(t * 1.5) + k, 4) == 0 and not dk:
+				var q_ := _pt(x0 + w_ * (k + 0.5) / 4, D_FAR, hu, cam)
+				for q: QP in [p, e]:
+					q.fill_rect(q_.x, q_.y - 1, 2, 2, QP.rgb(DScene.RED))
+	else:
+		# Neonröhren unter der Vorderkante (wie die Lichtschläuche im Film)
+		var tubes: Array = s["tubes"]
+		for i in tubes.size():
+			var c: Array = tubes[i]
+			var a := _pt(x0 + 6, D_FAR, hu, cam)
+			var b := _pt(x1 - 6, D_FAR, hu, cam)
+			var y := a.y + 3 + i * 4
+			var n := 6
+			for j in n:
+				if Scene._hash(j + i * 11, int(s["seed"])) < 0.18:
+					continue                       # kaputtes Segment
+				var flick := Scene._hash(int(t * 14) + j, int(s["seed"]) + i) < 0.03
+				var xa := a.x + (b.x - a.x) * j / n + 1
+				var xb := a.x + (b.x - a.x) * (j + 1) / n - 1
+				var cc: Array = mul(c, 0.25) if (dk or flick) else c
+				var qs: Array = [p] if dk or flick else [p, e]
+				for q: QP in qs:
+					q.fill_rect(xa, y, xb - xa, 2, QP.rgb(cc))
+				p.fill_rect(xa, y + 2, xb - xa, 1, QP.rgb(mul(cc, 0.35)))
+			if not dk:
+				pools.append([x0 + w_ * 0.5, 0.05 + 0.1 * i, c, 0.55])
+		# hängende Schilder
+		for sg: Array in s["signs"]:
+			var f: float = sg[0]
+			var c: Array = sg[1]
+			var word: String = sg[2]
+			var drop: float = sg[3]
+			var sd: int = sg[4]
+			var x := x0 + w_ * f
+			var top := _pt(x, D_FAR + 0.03, hu, cam)
+			var tw := Pixfont.text_width(word)
+			var bx := int(top.x)
+			var by := int(top.y + drop)
+			p.set_pen(QP.rgb([16, 16, 18]), 1.0)
+			p.draw_line(bx + 2, top.y, bx + 2, by)
+			p.draw_line(bx + tw + 4, top.y, bx + tw + 4, by)
+			p.set_no_pen()
+			p.fill_rect(bx, by, tw + 7, 10, QP.rgb([10, 12, 14]))
+			var lit := not dk and Scene._hash(int(t * 9), sd) > 0.02
+			var qs: Array = [p, e] if lit else [p]
+			for q: QP in qs:
+				Pixfont.draw(q, bx + 4, by + 2, word, c if lit else mul(c, 0.3), 1, null)
+	# Lichtpfützen am Boden unter den Lampen
+	if not pools.is_empty():
+		p.set_mode(PLUS)
+		for pl: Array in pools:
+			var x: float = pl[0]
+			var d: float = pl[1]
+			var c: Array = pl[2]
+			var k: float = pl[3]
+			var gx := Persp.screen_x(x, d, cam)
+			var gy := Persp.ground_y(d)
+			var r := 46 * Persp.scale(d)
+			var rg := QGrad.radial(gx, gy, r)
+			rg.set_color_at(0, QP.rgb(c, int(90 * k)))
+			rg.set_color_at(1, QP.c(0, 0, 0, 0))
+			p.save()
+			p.translate(gx, gy)
+			p.scale(1.0, 0.35)
+			p.translate(-gx, -gy)
+			p.fill_rect(gx - r, gy - r, 2 * r, 2 * r, rg)
+			p.restore()
+		p.set_mode(OVER)
+
+
+## Unter dem Überbau ist es dunkler; von den Kanten tropft das Regenwasser.
+func _spans_front(p: QP, _e: QP, cam: float, t: float) -> void:
+	var th: Dictionary = city.th
+	var drip := mix(th["fog"], DScene.PALE, 0.6)
+	for s: Dictionary in _spans_on(cam):
+		# unter dem Überbau ist es dunkler - auch auf den Leuten (Leuchtendes glüht weiter)
+		p.set_no_pen()
+		p.set_brush(QP.c(0, 0, 0, 70 if s["kind"] == "bridge" else 45))
+		p.draw_polygon(_span_volume(s, cam))
+		# Wasservorhang an den Stirnkanten
+		var sd: int = s["seed"]
+		for x: float in [float(s["x0"]), float(s["x1"])]:
+			for k in 14:
+				var d := D_FAR + (k + Scene._hash(k, sd)) * 0.09
+				if d > 1.2:
+					break
+				var q_ := _pt(x, d, float(s["hu"]), cam)
+				var gy := Persp.ground_y(d)
+				var ph := Py.mod(t * (1.6 + Scene._hash(k, 7)) + Scene._hash(k, sd + 3), 1.0)
+				var y := q_.y + (gy - q_.y) * ph
+				var ln := 3 + 8 * Persp.scale(d)
+				p.fill_rect(q_.x, y, 1, ln, QP.rgb(drip, 120))
+
+
+# ------------------------------------------------------------------ Taube
+## Weiße Taube: Körper, zwei Flügel im Schlag, leicht leuchtend im Gegenlicht.
+func _draw_dove(p: QP, e: QP, dv: Dictionary, cam: float) -> void:
+	var d: float = dv["d"]
+	var k := Persp.ppu(d) * 2.2
+	var x := Persp.screen_x(float(dv["x"]), d, cam)
+	var y := Persp.ground_y(d) - float(dv["z"]) * Persp.ppu(d)
+	if y < -20:
+		return
+	var flap := sin(float(dv["t"]) * 15.0)
+	var body := [236, 240, 240]
+	p.set_no_pen()
+	p.set_mode(PLUS)                # weicher Schein, damit sie im Regen lesbar bleibt
+	var g := QGrad.radial(x, y, 10 * k)
+	g.set_color_at(0, QP.c(200, 210, 220, 60))
+	g.set_color_at(1, QP.c(0, 0, 0, 0))
+	p.fill_rect(x - 10 * k, y - 10 * k, 20 * k, 20 * k, g)
+	p.set_mode(OVER)
+	for qa: Array in [[p, 255], [e, 120]]:
+		var q: QP = qa[0]
+		q.set_no_pen()
+		q.set_brush(QP.rgb(body, qa[1]))
+		q.draw_ellipse(x - 2.2 * k, y - 1.0 * k, 4.4 * k, 2.0 * k)
+		q.draw_ellipse(x + 1.6 * k, y - 1.6 * k, 1.6 * k, 1.4 * k)          # Kopf
+		for s_: int in [-1, 1]:
+			var tip_y := y - flap * 3.4 * k * s_ * s_
+			q.draw_polygon(PackedVector2Array([Vector2(x - 1.2 * k, y), Vector2(x + 1.0 * k, y),
+				Vector2(x - 0.4 * k + s_ * 0.6 * k, tip_y - 0.6 * k)]))
+		q.draw_polygon(PackedVector2Array([Vector2(x - 2.0 * k, y - 0.3 * k), Vector2(x - 3.6 * k, y - 0.9 * k),
+			Vector2(x - 3.6 * k, y + 0.5 * k)]))                    # Schwanz
+	p.fill_rect(x + 2.8 * k, y - 1.1 * k, maxf(1.0, 0.6 * k), maxf(1.0, 0.4 * k), QP.rgb([200, 150, 90]))
+
+
+# ------------------------------------------------------------------ Müll im Wind
+## je Zone: [mittlerer Abstand der Böen s, Stücke je Böe min, max]. Tyrell ist sauber.
+const LITTER := [[9.0, 3, 7], [16.0, 2, 4], [14.0, 2, 5], [10.0, 3, 6], [0.0, 0, 0]]
+const PAPER := [[170, 166, 150], [140, 146, 140], [120, 108, 88], [190, 150, 110], [90, 96, 92]]
+
+
+func _update_litter(dt: float, cam: float) -> void:
+	var lr: Array = LITTER[Py.imod(city.zone, 5)]
+	var rate: float = lr[0]
+	for m: Dictionary in litter:
+		m["x"] = float(m["x"]) + float(m["vx"]) * dt
+		m["ph"] = float(m["ph"]) + float(m["spin"]) * dt
+		m["t"] = float(m["t"]) + dt
+		# Auftrieb in Böen, dann taumelnd wieder runter
+		var vz: float = float(m["vz"]) + (-9.0 + 22.0 * maxf(0.0, sin(float(m["t"]) * 1.7 + float(m["seed"])))) * dt
+		vz = maxf(-14.0, minf(16.0, vz))
+		m["vz"] = vz
+		m["z"] = maxf(0.0, float(m["z"]) + vz * dt)
+		if float(m["z"]) <= 0.0:
+			m["vx"] = float(m["vx"]) * maxf(0.0, 1.0 - 1.6 * dt)        # liegt: Reibung
+			m["vz"] = maxf(0.0, float(m["vz"]))
+	var half := W / 2.0 / Persp.ppu(0.3) + 80
+	var kept: Array = litter.filter(func(m: Dictionary) -> bool: return absf(float(m["x"]) - cam) < half + 60)
+	litter = kept.slice(maxi(0, kept.size() - 40))
+	if rate <= 0:
+		return
+	_gust -= dt
+	if _gust > 0:
+		return
+	_gust = rng.uniform(0.5, 1.5) * rate
+	var side: int = rng.choice([-1, 1])
+	var v := -side * rng.uniform(55, 95)
+	for _i in rng.randint(lr[1], lr[2]):
+		var d := rng.uniform(0.05, 1.0)
+		var x := cam + side * (W / 2.0 / Persp.ppu(d) + rng.uniform(5, 60))
+		var z := rng.uniform(2, 26)
+		var vz := rng.uniform(-2, 8)
+		var vx := v * rng.uniform(0.7, 1.2)
+		var ph := rng.uniform(0, 6.28)
+		var spin := rng.uniform(5, 12) * float(rng.choice([-1, 1]))
+		var sd := rng.uniform(0, 6.28)
+		var col: Array = rng.choice(PAPER)
+		var ww := rng.uniform(3.0, 6.0)
+		litter.append({"x": x, "d": d, "z": z, "vz": vz, "vx": vx, "ph": ph, "spin": spin, "t": 0.0, "seed": sd,
+				"col": col, "w": ww})
+
+
+## Ein Blatt Papier, das sich im Wind dreht (Breite pulsiert mit der Drehung).
+func _draw_litter(p: QP, m: Dictionary, cam: float) -> void:
+	var d: float = m["d"]
+	var k := Persp.ppu(d)
+	var x := Persp.screen_x(float(m["x"]), d, cam)
+	if x < -10 or x > W + 10:
+		return
+	var gy := Persp.ground_y(d)
+	var y := gy - float(m["z"]) * k
+	var ph: float = m["ph"]
+	var ww := maxf(1.0, float(m["w"]) * k * absf(cos(ph)))
+	var hh := maxf(1.0, float(m["w"]) * k * 0.6 * absf(sin(ph * 0.7)) + 0.6)
+	var col := mix(m["col"], city.th["fog"], 0.3 * (1 - d))
+	var lit := 0.75 + 0.35 * cos(ph)           # Vorder-/Rückseite fangen das Licht verschieden
+	p.set_no_pen()
+	if float(m["z"]) > 0.5:
+		p.fill_rect(x - ww / 2, gy - 0.5, ww, 1, QP.c(0, 0, 0, 60))
+	p.fill_rect(x - ww / 2, y - hh / 2, ww, hh, QP.rgb(mul(col, lit)))
+
+
+# ------------------------------------------------------------------ Radfahrer (Kulisse)
+## je Zone: [mittlerer Abstand s, Gruppengröße min, max]. Nur ab und zu ein Pulk wie im
+## Film - nie ein Dauerstrom.
+const BIKE_RATE := [[55.0, 3, 4], [45.0, 3, 4], [30.0, 3, 6], [60.0, 3, 4], [0.0, 0, 0]]
+const CADENCE := 6.5                    # rad/s Kurbel (~1 Umdrehung pro Sekunde, gemütlich)
+const BIKE_BANDS := [[0.10, 0.14], [0.42, 0.46]]
+const PONCHO := [[40, 44, 40], [62, 52, 42], [30, 40, 50], [70, 40, 36], [52, 56, 60], [36, 30, 28]]
+
+
+func _update_bikes(dt: float, cam: float) -> void:
+	var br: Array = BIKE_RATE[Py.imod(city.zone, 5)]
+	var rate: float = br[0]
+	for b: Dictionary in bikes:
+		b["x"] = float(b["x"]) + float(b["v"]) * dt
+		b["ph"] = float(b["ph"]) + CADENCE * dt * absf(float(b["v"])) / 50.0
+	var k := Persp.ppu(0.1)
+	var half := W / 2.0 / k + 60
+	bikes = bikes.filter(func(b: Dictionary) -> bool: return absf(float(b["x"]) - cam) < half + 160)
+	if rate <= 0:
+		return
+	_bike_next -= dt
+	if _bike_next > 0:
+		return
+	_bike_next = rng.uniform(0.6, 1.4) * rate
+	var side: int = rng.choice([-1, 1])
+	var v := -side * rng.uniform(40, 58)
+	var band: Array = rng.choice(BIKE_BANDS)
+	var d0 := rng.uniform(band[0], band[1])
+	var x0 := cam + side * half
+	for j in rng.randint(br[1], br[2]):
+		var x := x0 + side * (j * rng.uniform(14, 26))
+		var d := d0 + rng.uniform(-0.02, 0.02)
+		var vv := v * rng.uniform(0.92, 1.06)
+		var ph := rng.uniform(0, 6.28)
+		var poncho: Array = rng.choice(PONCHO)
+		var hat := rng.random() < 0.7
+		var umb := rng.random() < 0.3
+		var glow := rng.random() < 0.4
+		var sd := rng.randint(0, 999)
+		bikes.append({"x": x, "d": d, "v": vv, "ph": ph, "poncho": poncho, "hat": hat, "umb": umb, "glow": glow,
+				"seed": sd})
+
+
+## Radfahrer im Poncho mit Kegelhut (Chinatown-Sequenz): Lampe am Lenker, manchmal ein
+## Schirm. Gezeichnet in Welt-Einheiten, skaliert mit der Tiefe.
+func _draw_bike(p: QP, e: QP, b: Dictionary, cam: float, _t: float) -> void:
+	var d: float = b["d"]
+	var k := Persp.ppu(d)
+	var gx := Persp.screen_x(float(b["x"]), d, cam)
+	var gy := Persp.ground_y(d)
+	if gx < -40 or gx > W + 40:
+		return
+	var sd := 1 if float(b["v"]) > 0 else -1
+	var fog: Array = city.th["fog"]
+	var fk := 0.25 * (1 - d)            # hinten mehr im Dunst
+	var U := func(u: float, v: float) -> Vector2: return Vector2(gx + u * k * sd, gy - v * k)
+	var c_ := func(col: Array) -> Color: return QP.rgb(mix(col, fog, fk))
+	var frame_c := [22, 24, 26]
+	# Schatten
+	p.set_no_pen()
+	p.set_brush(QP.c(0, 0, 0, 90))
+	p.draw_ellipse(gx - 10 * k, gy - 1.2 * k, 20 * k, 2.4 * k)
+	p.set_pen(c_.call(frame_c), maxf(1.0, 0.7 * k))
+	p.set_no_brush()
+	for wx: float in [-7.0, 7.0]:
+		var c: Vector2 = U.call(wx, 4.5)
+		p.draw_ellipse_c(c.x, c.y, 4.5 * k, 4.5 * k)
+	p.draw_polyline(PackedVector2Array([U.call(-7, 4.5), U.call(0, 5), U.call(-2, 12), U.call(-7, 4.5)]))
+	p.draw_polyline(PackedVector2Array([U.call(0, 5), U.call(6, 12), U.call(7, 4.5)]))
+	p.draw_line_v(U.call(6, 12), U.call(7, 14.5))
+	# Beine (Kurbel)
+	var a: float = b["ph"]
+	var hip: Vector2 = U.call(-2, 14)
+	for s_: float in [0.0, PI]:
+		var pd: Vector2 = U.call(3 * cos(a + s_), 5 - 3 * sin(a + s_))   # oben vorwärts
+		var kn := Vector2((hip.x + pd.x) / 2 + 3 * k * sd, (hip.y + pd.y) / 2 - 1.5 * k)
+		p.set_pen(c_.call([20, 20, 24] if s_ == 0.0 else [14, 14, 16]), maxf(1.0, 1.6 * k))
+		p.draw_polyline(PackedVector2Array([hip, kn, pd]))
+	# Poncho + Arm
+	p.set_no_pen()
+	p.set_brush(c_.call(b["poncho"]))
+	p.draw_polygon(PackedVector2Array([U.call(-6, 13), U.call(5, 15), U.call(2, 27), U.call(-1, 27.5)]))
+	p.set_pen(c_.call(mul(b["poncho"], 0.7)), maxf(1.0, 1.4 * k))
+	p.draw_line_v(U.call(1, 25), U.call(6.5, 14.5))
+	p.set_no_pen()
+	# Kopf + Kegelhut / Kapuze
+	p.set_brush(c_.call([120, 96, 80]))
+	var hc: Vector2 = U.call(1, 30)
+	p.draw_ellipse_c(hc.x, hc.y, 2.4 * k, 2.6 * k)
+	if b["hat"]:
+		p.set_brush(c_.call([128, 108, 76]))
+		p.draw_polygon(PackedVector2Array([U.call(-5, 30.6), U.call(7, 30.6), U.call(1, 35.5)]))
+		p.set_brush(c_.call([90, 74, 52]))
+		p.draw_polygon(PackedVector2Array([U.call(-5, 30.6), U.call(7, 30.6), U.call(1, 31.6)]))
+	else:
+		p.set_brush(c_.call(mul(b["poncho"], 0.8)))
+		var hk: Vector2 = U.call(0.6, 31)
+		p.draw_ellipse_c(hk.x, hk.y, 3.0 * k, 3.0 * k)
+	# Schirm (Papierschirm, manchmal mit leuchtendem Schaft)
+	if b["umb"]:
+		var shaft: Array = DScene.CYAN if b["glow"] else [50, 46, 40]
+		var qs: Array = [p, e] if b["glow"] else [p]
+		for q: QP in qs:
+			q.set_pen(QP.rgb(shaft), maxf(1.0, 0.6 * k))
+			q.draw_line_v(U.call(3, 22), U.call(1, 41))
+		p.set_no_pen()
+		p.set_brush(c_.call([176, 146, 100]))
+		p.draw_polygon(PackedVector2Array([U.call(-10, 37), U.call(1, 43), U.call(12, 37), U.call(1, 39)]))
+	# Lampe am Lenker + Lichtkegel auf dem Boden
+	var hl: Vector2 = U.call(7.4, 13)
+	for q: QP in [p, e]:
+		q.fill_rect(hl.x - 1, hl.y - 1, 2, 2, QP.rgb([255, 246, 210]))
+	p.set_mode(PLUS)
+	var cx := gx + 20 * k * sd
+	var g := QGrad.radial(cx, gy, 16 * k)
+	g.set_color_at(0, QP.c(255, 240, 200, 60))
+	g.set_color_at(1, QP.c(0, 0, 0, 0))
+	p.save()
+	p.translate(cx, gy)
+	p.scale(1.0, 0.3)
+	p.translate(-cx, -gy)
+	p.fill_rect(gx + 4 * k * sd - 16 * k if sd > 0 else gx - 36 * k, gy - 16 * k, 32 * k, 32 * k, g)
+	p.restore()
+	p.set_mode(OVER)
 
 
 # ------------------------------------------------------------------ CRT-Einschalten

@@ -13,6 +13,8 @@ var upgrades: Array = []
 var zone_index: int = 0
 var totals: Dictionary = {}
 var origami: Array = []                # gefundene Origami-Figuren (Gaff war hier)
+var roy_spared: bool = false           # ROY hat dich verschont und du ihn
+var cheat: bool = false                # "giveall": unsterblich, Ausgang immer offen
 var mods: Dictionary = {}
 
 
@@ -28,6 +30,8 @@ func _init(seed_value: int = 0, difficulty_: String = "normal") -> void:
 	zone_index = 0
 	totals = {"reps": 0, "civs": 0, "escaped": 0, "scans": 0, "shots": 0, "time": 0.0}
 	origami = []
+	roy_spared = false
+	cheat = false
 	mods = {"scan_max": Config.SCAN_CHARGES, "scan_time": 1.0, "deep": false, "observe": 1.0,
 			"speed": 1.0, "aim_min": Config.AIM_MIN, "susp": 1.0, "flee": 1.0, "glint": 1.0,
 			"shout_cd": 1.0, "shout_r": 1.0}

@@ -25,9 +25,6 @@ var sparks: Array = []
 var tracers: Array = []
 var flashes: Array = []
 var trauma := 0.0
-var lightning := 0.0
-var bolt: Variant = null      # Array von [x, y] oder null
-var _next_bolt := 8.0
 var hurt := 0.0
 var intensity := 0.6
 var _steam_tex: Array = []
@@ -98,14 +95,31 @@ func update_rain(dt: float, cam_dx: float) -> void:
 		s[2] = float(s[2]) + dt
 
 
-func draw_rain(p: QP, tint: Array) -> void:
+## dry: Polygone (Bildschirm), in denen kein Regen fällt (unter Brücken/Überhängen;
+## im Original eine Clip-Region - hier werden Tropfen mit Startpunkt darin übersprungen).
+func draw_rain(p: QP, tint: Array, dry: Array = []) -> void:
 	var lines_far: Array = []
 	var lines_mid: Array = []
 	var lines_near: Array = []
+	var boxes: Array = []
+	for poly: PackedVector2Array in dry:
+		var bb := Rect2(poly[0], Vector2.ZERO)
+		for q in poly:
+			bb = bb.expand(q)
+		boxes.append(bb)
 	for r: Array in rain:
 		var x: float = r[0]
 		var y: float = r[1]
 		var layer: float = r[2]
+		if not dry.is_empty():
+			var pt := Vector2(x, y)
+			var skip := false
+			for i in dry.size():
+				if (boxes[i] as Rect2).has_point(pt) and Geometry2D.is_point_in_polygon(pt, dry[i]):
+					skip = true
+					break
+			if skip:
+				continue
 		var ln := 4 + 12 * layer
 		var dx := ln * 0.32
 		var ln_ := [Vector2(x, y), Vector2(x - dx, y + ln)]
@@ -216,24 +230,3 @@ func shake() -> Array:
 	var sx := Py.round(rng.uniform(-1, 1) * 5 * t)
 	var sy := Py.round(rng.uniform(-1, 1) * 4 * t)
 	return [sx, sy]
-
-
-# ------------------------------------------------------------------ Blitz
-func update_weather(dt: float, rain_level: float) -> bool:
-	lightning = maxf(0.0, lightning - dt * 3.0)
-	_next_bolt -= dt
-	if _next_bolt <= 0 and rain_level > 0.3:
-		_next_bolt = rng.uniform(9.0, 22.0)
-		lightning = 1.0
-		var x := rng.uniform(40, W - 40)
-		var pts: Array = [[x, 0.0]]
-		var y := 0.0
-		while y < Persp.FACADE_Y * 0.55:
-			y += rng.uniform(6, 14)
-			x += rng.uniform(-9, 9)
-			pts.append([x, y])
-		bolt = pts
-		return true
-	if lightning < 0.5:
-		bolt = null
-	return false

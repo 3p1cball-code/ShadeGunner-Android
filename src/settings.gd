@@ -8,6 +8,9 @@ const DEFAULTS := DSettings.DEFAULTS
 ## get(..., default)). Ohne diese Liste verwarf load_() sie - z. B. "aspect" galt nie
 ## über einen Neustart hinaus.
 const PORT_KEYS := ["aspect", "quality", "reflections", "rain", "fog", "fx", "render_mode", "touch"]
+## Vorgaben, die im Port anders sind als am Desktop: auf Handy/Handheld zählt die
+## Bildrate - daher Qualität MITTEL (ohne Reflexionen) statt HOCH.
+const PORT_DEFAULTS := {"quality": "mittel", "reflections": false, "rain": "viel", "fog": true, "fx": true}
 
 
 static func _path() -> String:
@@ -16,6 +19,7 @@ static func _path() -> String:
 
 static func load_() -> Dictionary:
 	var d: Dictionary = DEFAULTS.duplicate(true)
+	d.merge(PORT_DEFAULTS, true)
 	var data: Variant = Save._read_json(_path(), false)
 	if data is Dictionary:
 		for k: Variant in data:

@@ -59,17 +59,22 @@ static func _c(col: Array) -> Array:
 	return col.duplicate()
 
 
+## Schirmart: transparente Kuppel, Papierschirm (beige, wie im Film) oder Stoff.
+static func umb_style_of(r: float) -> String:
+	return "bubble" if r < 0.3 else ("paper" if r < 0.55 else "flat")
+
+
 ## Zufallsaussehen - Zufallsaufrufe in exakt der Reihenfolge von sprites.random_look.
-static func random_look(rng: PyRandom, uid: int, rain: float = 0.6) -> Dictionary:
+## accents: Leuchtfarben für Schirm/Akzent (Zonenpalette); null = DSprites.NEON.
+static func random_look(rng: PyRandom, uid: int, rain: float = 0.6, accents: Variant = null) -> Dictionary:
+	var acc: Array = accents if accents != null and not (accents as Array).is_empty() else DSprites.NEON
 	var outfit: String = rng.choice(DSprites.OUTFITS)
 	var head: String = rng.choice(DSprites.HEADS)
 	if outfit == "hoodie" and rng.random() < 0.6:
 		head = "hood"
 	var umbrella: Variant = null
 	if rng.random() < 0.18 + 0.22 * rain:
-		var pool: Array = DSprites.NEON.slice(0, 5)
-		pool.append([220, 230, 255])
-		umbrella = _c(rng.choice(pool))
+		umbrella = _c(rng.choice(acc))
 	if head in ["conical", "afro"]:
 		umbrella = null if rng.random() < 0.7 else umbrella
 	var idx: Array = range(DSprites.COATS.size())
@@ -80,13 +85,13 @@ static func random_look(rng: PyRandom, uid: int, rain: float = 0.6) -> Dictionar
 	var old := rng.random() < 0.07
 	var bag: Variant = rng.choice([null, null, null, null, "bag", "briefcase", "backpack"])
 	# Reihenfolge wie im dict(...)-Literal
-	var umb_style := "bubble" if rng.random() < 0.3 else "flat"
+	var umb_style := umb_style_of(rng.random())
 	var wf := rng.uniform(0.82, 1.28)
 	var hf := rng.uniform(0.88, 1.08) * (0.95 if old else 1.0)
 	var pants: Array = _c(rng.choice(DSprites.PANTS))
 	var skin: Array = _c(rng.choice(DSprites.SKINS))
 	var hair: Array = [170, 172, 180] if old else _c(rng.choice(DSprites.HAIRS))
-	var accent: Array = _c(rng.choice(DSprites.NEON))
+	var accent: Array = _c(rng.choice(acc))
 	var collar := rng.random() < 0.3
 	var cig := rng.random() < 0.12
 	var led := rng.random() < 0.16

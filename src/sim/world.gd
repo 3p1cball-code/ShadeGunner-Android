@@ -51,6 +51,14 @@ var boss_spawned: bool = false
 var boss_line: int = 0
 var boss_hits: int = 0
 var boss_speak_t: float = 0.0
+var boss_text: Variant = null           # was ROY gerade sagt (HUD tippt es ab)
+var boss_text_dur: float = 1.0
+var roy_mercy: bool = false             # er hat dich bis auf ein Herz geschlagen und lässt ab
+var roy_mono_i: int = 0
+var roy_mono_t: float = 0.0
+var roy_spared: bool = false            # ... und du hast ihn nicht erschossen
+var roy_waiting: bool = false           # er steht da und wartet, bis man herankommt
+var spans: Array = []                   # Überbauten (procgen.span_layout)
 var blackout_t: float = 0.0
 var blackout_at: Variant = null         # float oder null
 var _veh_uid: int = 0
@@ -124,6 +132,8 @@ func _init(run_: Run = null, seed_value: int = 0, zone_index_: Variant = null) -
 	camera_x = player.x + 60.0
 
 	actors = []
+	if zone_index == 4:            # am Ende leert sich die Stadt - dann steht da ROY
+		zone["fade"] = [length * Config.EMPTY_FROM, length - Config.EMPTY_TO]
 	var pr: Array = Procgen.populate(rng, zone, 140.0, length + 60.0, 1, zone_index)
 	var acts: Array = pr[0]
 	_uid = pr[1]
@@ -152,6 +162,19 @@ func _init(run_: Run = null, seed_value: int = 0, zone_index_: Variant = null) -
 	var mh: Array = Procgen.manholes(rng2, zone, length, rxs, obstacles)
 	manholes = mh[0]
 	obstacles += mh[1]
+	# Ampeltürme: eigenständige Objekte am hinteren Gehweg und nah vor der Kamera
+	obstacles += Procgen.towers(seed_value, zone_index, length, rxs, obstacles)
+	# Unter Brücken: Feuertonnen und Wracks (gleiche Lage wie im Renderer)
+	spans = Procgen.span_layout(length, seed_value, zone_index)
+	for o: Dictionary in Procgen.under_spans(zone_index, spans):
+		var clash := false
+		for q: Dictionary in obstacles:
+			if (absf(float(o["x"]) - float(q["x"])) < float(o["w"]) + float(q["w"]) + 6
+					and absf(float(o["d"]) - float(q["d"])) < float(o["dd"]) + float(q["dd"]) + 0.02):
+				clash = true
+				break
+		if not clash:
+			obstacles.append(o)
 	_unstick(acts)
 	origami = _place_origami()
 	vehicles = []
@@ -170,6 +193,13 @@ func _init(run_: Run = null, seed_value: int = 0, zone_index_: Variant = null) -
 	boss_line = 0
 	boss_hits = 0
 	boss_speak_t = 0.0
+	boss_text = null
+	boss_text_dur = 1.0
+	roy_mercy = false
+	roy_mono_i = 0
+	roy_mono_t = 0.0
+	roy_spared = false
+	roy_waiting = false
 	blackout_t = 0.0
 	blackout_at = rng.uniform(35.0, 85.0) if rng.random() < float(zone.get("blackout", 0)) else null
 	_veh_uid = 0
@@ -503,8 +533,10 @@ func _update_player(dt: float, inp: Dictionary) -> void:
 
 
 func exit_open() -> bool:
-	if boss_spawned and boss != null:
-		return not boss.alive      # Tor öffnet erst, wenn ROY liegt
+	if run.cheat:
+		return true
+	if boss_spawned and boss != null and boss.alive:
+		return false               # Tor öffnet erst, wenn ROY nicht mehr steht
 	return (stats["reps"] >= quota or reps_remaining() == 0
 			or stats["reps"] + reps_remaining() < quota)
 
@@ -895,16 +927,19 @@ func _hit(a: Actor) -> String:
 		a.flash_t = 0.3
 		a.knock = 44.0 * (1 if a.x >= player.x else -1)
 		events.append(["boss_hit", a.hp])
-		if a.hp <= 0:
+		if a.hp <= 0 or roy_mercy:          # wehrlos: ein Schuss genügt
+			a.hp = 0
 			_kill(a)
+			boss_text = null
+			boss_speak_t = 0.0
 			events.append(["boss_dead"])
 			_say(_tr("ROY deaktiviert."))
 			return "boss_dead"
 		boss_hits += 1
-		if boss_hits >= Config.ROY_PER_LINE and boss_line < Config.ROY_LINES.size() - 1:
+		if boss_hits >= Config.ROY_PER_LINE and boss_line < Config.ROY_TAUNTS.size() - 1:
 			boss_hits = 0
 			boss_line += 1
-			boss_speak_t = Config.ROY_SPEAK_S
+			_roy_say(Config.ROY_TAUNTS[boss_line], Config.ROY_SPEAK_S)
 			a.boss_invuln = true
 			events.append(["boss_line", boss_line])
 		return "boss"
@@ -988,6 +1023,13 @@ func hurt_player(src: Variant, knock: float = 90.0, text: String = "-1 INTEGRIT�
 	var p := player
 	if p.invuln > 0 or state != "playing":
 		return false
+	if src is Actor and (src as Actor).boss and (roy_mercy or p.hp <= Config.ROY_MERCY_HP):
+		if not roy_mercy:
+			_roy_mercy()
+		return false                         # ROY nimmt dir nie das letzte Herz
+	if run.cheat and p.hp <= 1:
+		p.invuln = 1.0
+		return false                         # Cheat: das letzte Herz bleibt
 	var src_x: float = src["x"] if src is Dictionary else src.x
 	p.hp -= 1
 	run.hp = p.hp
@@ -1564,7 +1606,7 @@ func _spawn_boss() -> void:
 	look.merge({"outfit": "long", "head": "short", "umbrella": null, "hair": [214, 220, 226],
 			"coat": [22, 22, 28], "coat_name": "schwarz", "collar": true, "bag": null,
 			"wf": 1.12, "hf": 1.07, "cig": false, "led": false, "mask": false, "old": false}, true)
-	var b := Actor.new(minf(length - 70.0, player.x + 120.0), player.depth, {
+	var b := Actor.new(length - Config.ROY_STAND, 0.3, {
 		"look": look, "uid": 900, "is_replicant": true, "facing": -1, "speed": 24.0,
 		"phase": 0.0, "target_depth": player.depth})
 	b.hp = Config.ROY_HP
@@ -1579,22 +1621,37 @@ func _spawn_boss() -> void:
 	boss_spawned = true
 	boss_line = 0
 	boss_hits = 0
-	boss_speak_t = Config.ROY_SPEAK_S + 0.8
-	events.append(["boss"])
-	target = b
-	manual_target = true
+	roy_waiting = true         # er steht im Regen vor Sebastians Haus und wartet
 
 
 func _update_boss(dt: float) -> void:
 	if zone_index != 4 or state != "playing":
 		return
 	if not boss_spawned:
-		# ROY tritt erst auf, wenn der Auftrag in Tyrell erledigt ist (Quote erfüllt)
-		if stats["reps"] >= quota and player.x > length - Config.ROY_TRIGGER:
-			_spawn_boss()
+		# ROY steht immer vor Sebastians Haus und wartet
+		_spawn_boss()
 		return
 	var b := boss
 	if b == null or not b.alive:
+		return
+	var p := player
+	if roy_waiting:
+		b.state = "idle"
+		b.vx = 0.0
+		b.timer = 99.0
+		b.boss_invuln = true
+		b.facing = 1 if p.x >= b.x else -1
+		if absf(p.x - b.x) < Config.ROY_WAKE:
+			roy_waiting = false
+			_roy_say(Config.ROY_TAUNTS[0], Config.ROY_SPEAK_S + 0.8)
+			events.append(["boss"])
+			target = b
+			manual_target = true
+		return
+	if not roy_mercy and p.hp <= Config.ROY_MERCY_HP and boss_speak_t <= 0.0:
+		_roy_mercy()
+	if roy_mercy:
+		_update_mercy(b, dt)
 		return
 	if boss_speak_t > 0.0:            # während der Rede: stehen, unverwundbar
 		boss_speak_t -= dt
@@ -1614,6 +1671,68 @@ func _update_boss(dt: float) -> void:
 			b.timer = 99.0
 
 
+func _roy_say(text: String, dur: float) -> void:
+	boss_text = text
+	boss_text_dur = dur
+	boss_speak_t = dur
+
+
+## ROY hätte dich töten können - und lässt ab. Ab jetzt ist er wehrlos: ein Schuss
+## genügt. Wer wartet, hört ihn sprechen und sieht ihn sterben.
+func _roy_mercy() -> void:
+	var b := boss
+	roy_mercy = true
+	roy_waiting = false
+	roy_mono_i = 0
+	roy_mono_t = 0.0
+	b.boss_invuln = false
+	b.aggressive = false
+	b.alert = false
+	b.state = "idle"
+	b.vx = 0.0
+	b.timer = 999.0
+	_roy_say(Config.ROY_LINES[0], Config.ROY_MONO_S)
+	if target == b:
+		target = null
+		manual_target = false
+	_say(_tr("ROY lässt von dir ab."))
+	events.append(["roy_mercy"])
+
+
+func _update_mercy(b: Actor, dt: float) -> void:
+	var p := player
+	p.invuln = maxf(p.invuln, 0.3)            # niemand sonst stört diesen Moment
+	if patrol_cd != null:
+		patrol_cd = maxf(float(patrol_cd), 20.0)
+	b.state = "idle"
+	b.vx = 0.0
+	b.timer = 999.0
+	b.boss_invuln = false
+	b.facing = 1 if p.x >= b.x else -1
+	roy_mono_t += dt
+	boss_speak_t = maxf(0.0, Config.ROY_MONO_S - roy_mono_t)
+	if roy_mono_t < Config.ROY_MONO_S:
+		return
+	roy_mono_i += 1
+	roy_mono_t = 0.0
+	if roy_mono_i < Config.ROY_LINES.size():
+		_roy_say(Config.ROY_LINES[roy_mono_i], Config.ROY_MONO_S)
+		return
+	# Er stirbt von selbst. Kein Treffer, keine Punkte - eine Taube fliegt auf.
+	b.alive = false
+	b.state = "dead"
+	b.dead_t = 0.0
+	b.peaceful = true
+	if target == b:
+		target = null
+	boss_text = null
+	boss_speak_t = 0.0
+	roy_spared = true
+	run.roy_spared = true
+	_say(_tr("Er hat dir das Leben gerettet."))
+	events.append(["dove", b.x, b.depth])
+
+
 # ------------------------------------------------------------------ Stromausfall
 func _update_blackout(dt: float) -> void:
 	if blackout_at != null and time >= float(blackout_at):
@@ -1629,7 +1748,7 @@ func _update_blackout(dt: float) -> void:
 
 
 func _fail(reason: String) -> void:
-	if state != "playing":
+	if state != "playing" or run.cheat:
 		return
 	state = "failed"
 	fail_reason = reason
@@ -1916,7 +2035,7 @@ func _animate(a: Actor, dt: float, depth_move: float = 0) -> void:
 	if not a.alive and not a.escaped:
 		a.anim = "die"
 		var nd := Looks.frame_count("die")
-		a.phase = minf(1.0, a.dead_t / 0.9)
+		a.phase = minf(1.0, a.dead_t / (3.0 if a.peaceful else 0.9))
 		a.frame = mini(nd - 1, int(a.phase * (nd - 1) + 0.0001))
 		return
 	var st := a.state

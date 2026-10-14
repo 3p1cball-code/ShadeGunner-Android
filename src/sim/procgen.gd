@@ -45,6 +45,16 @@ static func populate(rng: PyRandom, zone: Dictionary, x_from: float, x_to: float
 			var rr := rng.uniform(6, 9)
 			specs.append([gx + cos(ang) * rr, maxf(Config.NPC_DEPTH_MIN, gd + sin(ang) * 0.035), "group", gid, gx])
 		gid += 1
+	var fade: Variant = zone.get("fade")
+	if fade:                                     # Stadt leert sich zum Ende hin
+		var f0: float = fade[0]
+		var f1: float = fade[1]
+		var kept := []
+		for s: Array in specs:
+			var sx: float = s[0]
+			if sx < f0 or (sx < f1 and rng.random() > pow((sx - f0) / (f1 - f0), 0.8)):
+				kept.append(s)
+		specs = kept
 	var count := specs.size()
 	var n_rep := mini(count - 4, int(zone["replicants"]))
 	var replicant_ids := {}
@@ -62,7 +72,7 @@ static func populate(rng: PyRandom, zone: Dictionary, x_from: float, x_to: float
 		var is_rep := replicant_ids.has(i)
 		var uid := uid_start + i
 		var tells := Detection.spawn_tells(rng, is_rep, float(zone["camo"]))
-		var look := Looks.random_look(rng, uid, rain)
+		var look := Looks.random_look(rng, uid, rain, Palette.zone_colors(zone_index, "people"))
 		var facing: int = rng.choice([-1, 1])
 		var speed := rng.uniform(11.0, 26.0) * (0.55 if look.get("old") else 1.0)
 		var phase := rng.random()
@@ -103,6 +113,119 @@ static func ramen_positions(length: float, seed_: int, zone_index: int) -> Array
 	for k in 2:
 		var x := length * (0.28 + 0.44 * k) + rng.uniform(-120, 120)
 		out.append(minf(length - 160, maxf(180, x)))
+	return out
+
+
+## Deterministische Lage der Überbauten (Brücken / überhängende Gebäude) - Renderer und
+## Sim (Tonnen/Wracks darunter) nutzen dieselbe Liste. [{kind, x0, x1, seed}] nach x sortiert.
+static func span_layout(length: float, seed_: int, zone_index: int, exit_x: Variant = null) -> Array:
+	var rng := PyRandom.new(seed_ * 911 + zone_index * 13 + 2)
+	var ex: float = length if exit_x == null else float(exit_x)
+	var busy := []
+	for r: float in ramen_positions(length, seed_, zone_index):
+		busy.append([r - 170, r + 190])
+	busy.append([ex - 260, ex + 200])
+	var out := []
+	var plan: Array = DProcgen.SPAN_PLAN[Py.imod(zone_index, DProcgen.SPAN_PLAN.size())]
+	for kind: String in plan:
+		var wr: Array = DProcgen.BRIDGE_W if kind == "bridge" else DProcgen.OVERHANG_W
+		for _i in 80:
+			var w := rng.uniform(wr[0], wr[1])
+			var x0 := rng.uniform(length * 0.08, length * 0.9 - w)
+			var hit := false
+			for ab: Array in busy:
+				if float(ab[0]) < x0 + w and x0 < float(ab[1]):
+					hit = true
+					break
+			if hit:
+				continue
+			busy.append([x0 - 220, x0 + w + 220])
+			out.append({"kind": kind, "x0": x0, "x1": x0 + w, "seed": rng.randint(0, 99999)})
+			break
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["x0"]) < float(b["x0"]))
+	return out
+
+
+## Hindernisse unter den Brücken: Feuertonnen (Obdachlose wärmen sich) und Wracks.
+## Eigener Zufall je Überbau, damit die übrige Straße unverändert bleibt.
+static func under_spans(zone_index: int, spans: Array) -> Array:
+	var out := []
+	var clean := zone_index == 4
+	for s: Dictionary in spans:
+		var r := PyRandom.new(int(s["seed"]) + 17)
+		var n := 0
+		if not clean:
+			n = (2 + r.randint(0, 2)) if s["kind"] == "bridge" else r.randint(0, 2)
+		var xs := []
+		for _i in n * 4:
+			if xs.size() >= n:
+				break
+			var x := r.uniform(float(s["x0"]) + 8, float(s["x1"]) - 8)
+			var near := false
+			for q: float in xs:
+				if absf(x - q) < 30:
+					near = true
+					break
+			if near:
+				continue
+			xs.append(x)
+			var band: Array = r.choice(Config.OBSTACLE_BANDS)
+			var kind := "barrel" if r.random() < 0.6 else "wreck"
+			var wdh: Array = OBSTACLE_KINDS[kind]
+			var w: float = wdh[0]
+			var dd: float = wdh[1]
+			var h: float = wdh[2]
+			var b0: float = band[0]
+			var b1: float = band[1]
+			var d := r.uniform(b0 + dd, b1 - dd) if b1 - b0 > 2 * dd else (b0 + b1) / 2
+			out.append({"x": x, "d": d, "w": w, "dd": dd, "h": h, "kind": kind, "seed": r.randint(0, 9999)})
+	return out
+
+
+## Ampeltürme als eigene Objekte (wie Autos/Menschen nach Tiefe sortiert): am hinteren
+## Gehweg vor der Häuserfront und vereinzelt ganz vorn vor der Kamera (dort außerhalb der
+## Spielebene - sie verdecken, was dahinter passiert). Eigener Zufall.
+static func towers(seed_: int, zone_index: int, length: float, ramen: Array = [], existing: Array = []) -> Array:
+	var rng := PyRandom.new(seed_ * 409 + zone_index * 3 + 11)
+	var rate: Array = DProcgen.TOWER_RATE[Py.imod(zone_index, DProcgen.TOWER_RATE.size())]
+	var out := []
+	for pass_ in [[rate[0], 0.04, 0.06], [rate[1], 1.12, 1.2]]:
+		var rt: float = pass_[0]
+		var d0: float = pass_[1]
+		var d1: float = pass_[2]
+		var n := int(length / 1000.0 * rt + rng.random())
+		for _i in n * 8:
+			var have := 0
+			for o: Dictionary in out:
+				if (float(o["d"]) > 1.0) == (d0 > 1.0):
+					have += 1
+			if have >= n:
+				break
+			var x := rng.uniform(180.0, length - 160.0)
+			var d := rng.uniform(d0, d1)
+			var bad := false
+			for rx: float in ramen:
+				if absf(x - rx) < 120:
+					bad = true
+					break
+			if not bad:
+				for o: Dictionary in out:
+					if absf(x - float(o["x"])) < 90:
+						bad = true
+						break
+			if bad:
+				continue
+			for o: Dictionary in existing:
+				if absf(x - float(o["x"])) < float(o["w"]) + 14 and absf(d - float(o["d"])) < float(o["dd"]) + 0.05:
+					bad = true
+					break
+			if bad:
+				continue
+			var sd := rng.randint(0, 99999)
+			# hintere Türme 35-45 % kleiner (aus dem Seed, damit die Zufallsfolge gleich bleibt)
+			var size := 1.0 if d0 > 1.0 else 0.55 + float(sd % 1000) / 1000.0 * 0.10
+			out.append({"x": x, "d": d, "w": 7.0 * size, "dd": 0.025, "h": 999.0, "kind": "tower", "seed": sd,
+					"size": size})
 	return out
 
 

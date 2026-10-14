@@ -462,31 +462,33 @@ func _scale_px() -> float:
 
 
 # ------------------------------------------------------------------ Füllungen
-func _fill_poly(pts: PackedVector2Array, fill: Variant) -> void:
+func _fill_poly(pts: PackedVector2Array, fill: Variant, convex: bool = false) -> void:
 	if pts.size() < 3 or fill == null:
 		return
+	convex = convex or pts.size() == 3
 	if fill is QGrad:
 		var g: QGrad = fill
 		var it := _seg(SEG_RAD if g.kind == QGrad.RADIAL else SEG_LIN)
-		var uvs := PackedVector2Array()
-		for p in pts:
-			uvs.append(g.uv_at(p))
-		_add_polygon_safe(it, pts, PackedColorArray([_tm()]), uvs, g.texture().get_rid())
+		var uvs: PackedVector2Array = g.uv_xform() * pts      # in C++ statt Schleife je Punkt
+		var tex := g.texture()
+		var gm := g.modulate()
+		var tm := _tm()
+		_add_polygon_safe(it, pts, PackedColorArray([Color(tm.r * gm.r, tm.g * gm.g, tm.b * gm.b, tm.a * gm.a)]), uvs,
+			tex.get_rid(), convex)
 	else:
 		var it := _seg(SEG_N)
-		_add_polygon_safe(it, pts, PackedColorArray([_pc(fill)]), PackedVector2Array())
+		_add_polygon_safe(it, pts, PackedColorArray([_pc(fill)]), PackedVector2Array(), RID(), convex)
 
 
 func _add_polygon_safe(it: RID, pts: PackedVector2Array, cols: PackedColorArray,
-		uvs: PackedVector2Array, tex: RID = RID()) -> void:
+		uvs: PackedVector2Array, tex: RID = RID(), convex: bool = false) -> void:
 	# Konvexe/einfache Polygone direkt; scheitert die Triangulierung (Selbstschnitt),
 	# als Fächer zeichnen (Qt füllt OddEven, das kommt dem am nächsten).
-	var tri := Geometry2D.triangulate_polygon(pts)
+	# Konvexe Formen (Rechtecke, Ellipsen, Dreiecke) gleich als Fächer - spart die
+	# Triangulierung, die hier sonst den Großteil der Kosten je Form ausmacht.
+	var tri := PackedInt32Array() if convex else Geometry2D.triangulate_polygon(pts)
 	if tri.is_empty():
-		var idx := PackedInt32Array()
-		for i in range(1, pts.size() - 1):
-			idx.append_array([0, i, i + 1])
-		tri = idx
+		tri = _fan(pts.size())
 	var colors := cols
 	if cols.size() == 1:
 		colors = PackedColorArray()
@@ -497,11 +499,53 @@ func _add_polygon_safe(it: RID, pts: PackedVector2Array, cols: PackedColorArray,
 	RenderingServer.canvas_item_add_triangle_array(it, tri, pts, colors, uvs, PackedInt32Array(), PackedFloat32Array(), tex)
 
 
+static var _fans := {}          # Punktzahl -> Fächer-Indizes
+static var _units := {}         # Punktzahl -> Einheitskreis (Qt-Winkelrichtung)
+
+
+static func _fan(n: int) -> PackedInt32Array:
+	var f: Variant = _fans.get(n)
+	if f != null:
+		return f
+	var idx := PackedInt32Array()
+	for i in range(1, n - 1):
+		idx.append_array([0, i, i + 1])
+	_fans[n] = idx
+	return idx
+
+
+static func _unit(n: int) -> PackedVector2Array:
+	var u: Variant = _units.get(n)
+	if u != null:
+		return u
+	var pts := PackedVector2Array()
+	for i in n:
+		var t := TAU * float(i) / float(n)
+		pts.append(Vector2(cos(t), -sin(t)))
+	_units[n] = pts
+	return pts
+
+
 func fill_rect(x: float, y: float, w: float, h: float, fill: Variant) -> void:
 	if fill == null:
 		return
 	if fill is QGrad:
-		_fill_poly(PackedVector2Array([Vector2(x, y), Vector2(x + w, y), Vector2(x + w, y + h), Vector2(x, y + h)]), fill)
+		var g: QGrad = fill
+		if g.kind == QGrad.RADIAL and not g.stops.is_empty():
+			# Radial als 2D-Textur über ein Rechteck: ein add_texture_rect_region statt
+			# Dreiecks-Array + Radial-Shader (~15 us -> ~3 us je Lichthof/Lichtpfütze).
+			var tex := g.texture2d()
+			var gm := g.modulate()
+			var tm := _tm()
+			var sc := float(QGrad.N2) / (2.0 * QGrad.R2 * g.radius)
+			var off := QGrad.R2 * g.radius
+			var src := Rect2((x - g.center.x + off) * sc, (y - g.center.y + off) * sc, w * sc, h * sc)
+			var it := _seg(SEG_N)
+			RenderingServer.canvas_item_add_texture_rect_region(it, Rect2(x, y, w, h).abs(), tex.get_rid(), src,
+				Color(tm.r * gm.r, tm.g * gm.g, tm.b * gm.b, tm.a * gm.a), false, false)
+			return
+		_fill_poly(PackedVector2Array([Vector2(x, y), Vector2(x + w, y), Vector2(x + w, y + h), Vector2(x, y + h)]), fill,
+			true)
 		return
 	var it := _seg(SEG_N)
 	RenderingServer.canvas_item_add_rect(it, Rect2(x, y, w, h).abs(), _pc(fill))
@@ -554,6 +598,36 @@ func _dot_shape(it: RID, p: Vector2, r: float, col: Color) -> void:
 		RenderingServer.canvas_item_add_polygon(it, pts, PackedColorArray([col]))
 	else:
 		RenderingServer.canvas_item_add_rect(it, Rect2(p - Vector2(r, r), Vector2(2 * r, 2 * r)), col)
+
+
+## Dicker Linienzug mit eigener Breite je Punkt als EIN Dreiecksband (ohne Kappen;
+## Port-Helfer für Kabel - viel billiger als ein _stroke je Segment).
+func draw_strip(pts: PackedVector2Array, widths: PackedFloat32Array, col: Color) -> void:
+	var n := pts.size()
+	if n < 2:
+		return
+	var verts := PackedVector2Array()
+	verts.resize(n * 2)
+	for i in n:
+		var d := (pts[mini(n - 1, i + 1)] - pts[maxi(0, i - 1)]).normalized()
+		var nrm := Vector2(-d.y, d.x) * (widths[i] * 0.5)
+		verts[2 * i] = pts[i] + nrm
+		verts[2 * i + 1] = pts[i] - nrm
+	var idx := PackedInt32Array()
+	idx.resize((n - 1) * 6)
+	for i in n - 1:
+		var j := 2 * i
+		idx[i * 6] = j
+		idx[i * 6 + 1] = j + 1
+		idx[i * 6 + 2] = j + 2
+		idx[i * 6 + 3] = j + 1
+		idx[i * 6 + 4] = j + 3
+		idx[i * 6 + 5] = j + 2
+	var cols := PackedColorArray()
+	cols.resize(n * 2)
+	cols.fill(_pc(col))
+	var it := _seg(SEG_N)
+	RenderingServer.canvas_item_add_triangle_array(it, idx, verts, cols)
 
 
 func draw_line(ax: float, ay: float, bx: float, by: float) -> void:
@@ -617,6 +691,9 @@ func _ellipse_pts(x: float, y: float, w: float, h: float, a0: float = 0.0, span:
 	var per := (rx + ry) * PI * _scale_cached
 	var n := clampi(int(per / 2.0), 10, 96)
 	var full := absf(span - TAU) < 0.0001
+	if full and a0 == 0.0:
+		# volle Ellipse: gecachter Einheitskreis, Abbildung in C++ (Transform * Array)
+		return Transform2D(Vector2(rx, 0), Vector2(0, ry), Vector2(cx, cy)) * _unit(n)
 	var pts := PackedVector2Array()
 	var cnt := n if full else n + 1
 	for i in cnt:
@@ -629,7 +706,7 @@ func _ellipse_pts(x: float, y: float, w: float, h: float, a0: float = 0.0, span:
 func draw_ellipse(x: float, y: float, w: float, h: float) -> void:
 	var pts := _ellipse_pts(x, y, w, h)
 	if brush != null:
-		_fill_poly(pts, brush)
+		_fill_poly(pts, brush, true)
 	if pen_on:
 		for i in pts.size():
 			_stroke(pts[i], pts[(i + 1) % pts.size()])
@@ -643,7 +720,7 @@ func draw_ellipse_c(cx: float, cy: float, rx: float, ry: float) -> void:
 func draw_chord(x: float, y: float, w: float, h: float, start16: float, span16: float) -> void:
 	var pts := _ellipse_pts(x, y, w, h, deg_to_rad(start16 / 16.0), deg_to_rad(span16 / 16.0))
 	if brush != null:
-		_fill_poly(pts, brush)
+		_fill_poly(pts, brush, true)
 	if pen_on:
 		for i in pts.size():
 			_stroke(pts[i], pts[(i + 1) % pts.size()])
@@ -685,6 +762,94 @@ func draw_image_at(x: float, y: float, img: QImg) -> void:
 	if img == null:
 		return
 	draw_image(Rect2(x, y, img.width(), img.height()), img)
+
+
+## Viele Ausschnitte desselben Bildes in EINEM Aufruf (Port-Helfer: Perspektivboden,
+## Spiegelungsstreifen). Gleich draw_image je Paar dst/src, aber als ein Dreiecks-Array.
+## Ausschnitte dürfen über den Bildrand reichen (Rand wird geklemmt wie bei clip_uv).
+func draw_image_rects(img: QImg, dsts: Array, srcs: Array) -> void:
+	if img == null or img.tex == null or dsts.is_empty() or img.mirrored:
+		for i in dsts.size():
+			draw_image(dsts[i], img, srcs[i])
+		return
+	var ts := img.tex.get_size()
+	var reg := img.region
+	var n := dsts.size()
+	var pts := PackedVector2Array()
+	var uvs := PackedVector2Array()
+	var idx := PackedInt32Array()
+	pts.resize(n * 4)
+	uvs.resize(n * 4)
+	idx.resize(n * 6)
+	var j := 0
+	for i in n:
+		var d: Rect2 = dsts[i]
+		var s: Rect2 = srcs[i]
+		# wie clip_uv: Quelle auf das Bild begrenzen, Ziel anteilig mitschneiden
+		var s0 := s.position
+		var s1 := s.end
+		var c0 := Vector2(maxf(s0.x, 0.0), maxf(s0.y, 0.0))
+		var c1 := Vector2(minf(s1.x, reg.size.x), minf(s1.y, reg.size.y))
+		if c1.x <= c0.x or c1.y <= c0.y:
+			continue
+		var fx0 := (c0.x - s0.x) / s.size.x
+		var fx1 := (c1.x - s0.x) / s.size.x
+		var fy0 := (c0.y - s0.y) / s.size.y
+		var fy1 := (c1.y - s0.y) / s.size.y
+		var dx0 := d.position.x + d.size.x * fx0
+		var dx1 := d.position.x + d.size.x * fx1
+		var dy0 := d.position.y + d.size.y * fy0
+		var dy1 := d.position.y + d.size.y * fy1
+		var u0 := (reg.position.x + c0.x) / ts.x
+		var u1 := (reg.position.x + c1.x) / ts.x
+		var v0 := (reg.position.y + c0.y) / ts.y
+		var v1 := (reg.position.y + c1.y) / ts.y
+		var b := j * 4
+		pts[b] = Vector2(dx0, dy0)
+		pts[b + 1] = Vector2(dx1, dy0)
+		pts[b + 2] = Vector2(dx1, dy1)
+		pts[b + 3] = Vector2(dx0, dy1)
+		uvs[b] = Vector2(u0, v0)
+		uvs[b + 1] = Vector2(u1, v0)
+		uvs[b + 2] = Vector2(u1, v1)
+		uvs[b + 3] = Vector2(u0, v1)
+		var k := j * 6
+		idx[k] = b
+		idx[k + 1] = b + 1
+		idx[k + 2] = b + 2
+		idx[k + 3] = b
+		idx[k + 4] = b + 2
+		idx[k + 5] = b + 3
+		j += 1
+	if j == 0:
+		return
+	pts.resize(j * 4)
+	uvs.resize(j * 4)
+	idx.resize(j * 6)
+	var cols := PackedColorArray()
+	cols.resize(j * 4)
+	cols.fill(_tm())
+	var it := _seg(SEG_N)
+	RenderingServer.canvas_item_add_set_transform(it, xf)
+	RenderingServer.canvas_item_add_triangle_array(it, idx, pts, cols, uvs, PackedInt32Array(), PackedFloat32Array(),
+		img.tex.get_rid())
+	RenderingServer.canvas_item_add_set_transform(it, _gx())
+	_item_thin = false
+
+
+## Bild mit eigenem Material zeichnen (Port-Helfer, z. B. Reflexions-Shader). Quelle
+## immer ungespiegelt (der Shader kennt QImg.mirrored selbst), Deckkraft über die Modulation.
+func draw_image_material(dst: Rect2, img: QImg, mat: Material) -> void:
+	if img == null or img.tex == null:
+		return
+	_ver += 1
+	var it := _seg(SEG_N)
+	RenderingServer.canvas_item_set_material(it, mat.get_rid())
+	RenderingServer.canvas_item_add_set_transform(it, xf)
+	RenderingServer.canvas_item_add_texture_rect_region(it, dst, img.tex.get_rid(), img.region, _tm(), false, true)
+	_ver += 1
+	_item = RID()
+	_item_key = -1
 
 
 ## Textur direkt (z. B. ein ViewportTexture) gestreckt zeichnen.

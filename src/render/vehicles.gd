@@ -19,15 +19,17 @@ const C := DVehicles.C
 const CYAN := DVehicles.CYAN
 const MAGENTA := DVehicles.MAGENTA
 const AMBER := DVehicles.AMBER
-const VIOLET := DVehicles.VIOLET
+const GREEN := DVehicles.GREEN
 const TEAL := DVehicles.TEAL
 const PALE := DVehicles.PALE
 const WHITE := DVehicles.WHITE
+const RED := DVehicles.RED
+const NBLUE := DVehicles.NBLUE
 const CRIMSON := DVehicles.CRIMSON
 const VEH_SCALE := DVehicles.VEH_SCALE
 const BODY := DVehicles.BODY
-const UNDERGLOW := DVehicles.UNDERGLOW
-const ACCENT := DVehicles.ACCENT
+const OB_SCALE := DVehicles.OB_SCALE
+const _OB_W := {"wreck": 66}
 const LIVERY := DVehicles.LIVERY
 const BUS_OP := DVehicles.BUS_OP
 const BUS_ROUTE := DVehicles.BUS_ROUTE
@@ -47,6 +49,26 @@ static var baker: Baker
 static var atlas_size := 2048
 static var _CACHE := {}
 static var _cache_obj: ExactCache
+## Unterboden-Neon und Zierfarben: je Zone aus der Zonenpalette (set_zone).
+static var UNDERGLOW: Array = DVehicles.UNDERGLOW
+static var ACCENT: Array = DVehicles.ACCENT
+static var _zone := -1
+
+
+## Unterboden-Neon und Zierfarben aus der Zonenpalette (Farbkuratierung je Level).
+static func set_zone(zone_index: int) -> void:
+	if _zone == zone_index:
+		return
+	_zone = zone_index
+	var neon := Palette.zone_colors(zone_index, "people")
+	UNDERGLOW = neon.duplicate()
+	var pal: Array = Palette.zone_look(zone_index)["pal"]
+	var acc := neon.duplicate()
+	for c: Array in neon.slice(0, 3):
+		acc.append(_mul(c, 0.7))
+	acc.append(pal[5])
+	ACCENT = acc
+	clear_cache()
 
 
 static func _q(c: Array, a: float = 255.0) -> Color:
@@ -325,6 +347,46 @@ static func _sedan(p: QP, e: QP, body: Array, glow: Array, rim: Array, accent: A
 
 
 ## Metrokab: hoher Glas-Dom über kastigem Unterbau, Schachbrettband, Dachlampe.
+## 60er-Jahre-Straßenkreuzer wie im Film: lang und flach, Heckflossen, Chrom, runde
+## Doppelscheinwerfer, Weißwandreifen - teils mit Gepäck auf dem Dach, nachgerüsteten
+## Kabeln oder einem Neonstreifen darunter.
+static func _classic(p: QP, e: QP, body: Array, glow: Array, rim: Array, accent: Array, style: int) -> void:
+	if style in [3, 4]:
+		for q: QP in [p, e]:
+			_rect(q, -26, -2.6, 52, 0.9, glow)
+	_poly(p, [[-31.6, -5], [-32.4, -9.2], [-31.2, -12.4], [-27, -10.8], [-14.5, -10.9], [-10.5, -16.4],
+			[7.8, -16.8], [13.2, -11.2], [28.6, -10.4], [31.8, -8.8], [32.2, -5.2], [30, -3.6], [-30, -3.6]], body)
+	if style == 2:                                                       # Zweifarb-Dach
+		_poly(p, [[-10.5, -16.4], [7.8, -16.8], [8.6, -15.6], [-10.2, -15.4]], _mul(accent, 0.7))
+	_poly(p, [[-9.4, -11.2], [-7.4, -15.6], [7.0, -15.9], [11.4, -11.2]], WIN)
+	_rect(p, -1.2, -15.8, 1.2, 4.8, body)                               # B-Säule
+	_rect(p, -10.2, -16.8, 18.6, 0.6, _mul(rim, 0.9))
+	_rect(p, -30.5, -11.0, 17, 0.6, _mul(rim, 0.7))
+	_rect(p, 13.5, -10.9, 15, 0.6, _mul(rim, 0.6))
+	_rect(p, -30, -8.0, 60, 0.6, CHROME)                                # Zierleiste
+	_rect(p, -33.2, -6.6, 4.4, 2.2, CHROME)                             # Stoßstangen
+	_rect(p, 29.8, -6.6, 4.4, 2.2, CHROME)
+	_rect(p, -33.2, -6.6, 4.4, 0.5, _mul(rim, 1.0))
+	_rect(p, 29.8, -6.6, 4.4, 0.5, _mul(rim, 1.0))
+	_rect(p, 29.6, -9.4, 2.2, 2.4, _mul(CHROME, 0.7))                   # Kühlergrill
+	_line(p, 11.6, -11.4, 9.0, -15.0, [12, 12, 16], 0.5)                # Wischer
+	if style in [0, 1]:                                                  # Gepäck auf dem Dach
+		_rect(p, -7.0, -19.2, 13.0, 2.4, _mul([96, 80, 60], 0.8 + 0.2 * style))
+		_rect(p, -6.0, -20.6, 7.0, 1.6, _mul([80, 90, 84], 0.8))
+		_line(p, -6.5, -19.4, -6.5, -16.8, [20, 20, 22], 0.4)
+		_line(p, 5.5, -19.4, 5.5, -16.8, [20, 20, 22], 0.4)
+	if style == 4:                                                       # nachgerüstete Kabel
+		_line(p, 20, -10.8, 24, -13.0, [20, 20, 24], 0.5)
+		_line(p, 24, -13.0, 27, -10.6, [20, 20, 24], 0.5)
+	for x: float in [-19.0, 19.0]:
+		_wheel(p, x, 3.7, null, [150, 152, 146])                        # Weißwand + Chromkappe
+		_rect(p, x - 4.3, -7.9, 8.6, 1.0, _mul(body, 0.55))             # Radlauf
+	_lamps(p, e, [31.2], -9.4, 1.1, 1.1, HEAD)                         # runde Doppelscheinwerfer
+	_lamps(p, e, [31.2], -7.7, 1.1, 1.1, HEAD)
+	_lamps(p, e, [-32.4], -12.0, 0.9, 2.4, TAIL)                       # Flossenleuchten
+	_lamps(p, e, [-32.6], -8.2, 0.8, 1.2, TAIL)
+
+
 static func _metrokab(p: QP, e: QP, body: Array, glow: Array, rim: Array, d: int, accent: Array, style: int) -> void:
 	for q: QP in [p, e]:
 		_rect(q, -22, -2.6, 44, 1.0, glow)
@@ -418,7 +480,7 @@ static func _armadillo(p: QP, e: QP, body: Array, rim: Array, rnd: int, accent: 
 ## Aerial-Limousine: lang, lackschwarz, Schlitzfenster, Radgondeln vorn, Goldlinie.
 static func _limo(p: QP, e: QP, body: Array, rim: Array, _d: int, accent: Array) -> void:
 	for q: QP in [p, e]:
-		_rect(q, -36, -2.4, 64, 0.9, VIOLET)
+		_rect(q, -36, -2.4, 64, 0.9, NBLUE)
 	_poly(p, [[-42, -4], [-42.4, -10.4], [-38, -12.8], [-10, -13.6], [-4, -16.6], [18, -16.6], [28, -12.6],
 		[38, -10.6], [42, -8.2], [42.2, -5.2], [37, -3.6], [-40, -3.6]], body)
 	_poly(p, [[-3, -15.6], [17, -15.6], [24, -13.0], [-1, -13.0]], [30, 24, 50])
@@ -526,6 +588,8 @@ static func _draw_vehicle(p: QP, e: QP, kind: String, seed_: int, rim: Array, d:
 		e.restore()
 	elif kind == "car":
 		_sedan(p, e, body, glow, rim, accent, style, livery, d)
+	elif kind == "classic":
+		_classic(p, e, body, glow, rim, accent, style)
 	elif kind == "taxi":
 		_metrokab(p, e, body, glow, rim, d, accent, style)
 	elif kind == "truck":
@@ -621,7 +685,7 @@ static func _draw_obstacle(p: QP, e: QP, kind: String, seed_: int, rim: Array) -
 		for q: QP in [p, e]:
 			_rect(q, -3.4, -9.4, 6.8, 1.0, AMBER)   # Glut am Rand
 	elif kind == "vending":
-		var col: Array = [CYAN, MAGENTA, AMBER, CRIMSON][rnd % 4]
+		var col: Array = [CYAN, GREEN, AMBER, RED, NBLUE][rnd % 5]
 		_rect(p, -6, -20, 12, 20, [30, 32, 44])
 		_rect(p, -6, -20, 12, 0.8, _mul(rim, 0.8))
 		for qa: Array in [[p, 255.0], [e, 200.0]]:
@@ -632,6 +696,47 @@ static func _draw_obstacle(p: QP, e: QP, kind: String, seed_: int, rim: Array) -
 				_rect(q, -4.5, y, 6, 1.4, _mul(col, 1.1), a)
 			_rect(q, 3, -17, 2, 2, [255, 250, 230], a)
 		_rect(p, -5, -5, 7, 2.4, [10, 10, 14])
+	elif kind == "dustbin":
+		# Blechmülltonne mit Rippen; Deckel schief oder daneben, Müll quillt raus
+		var c: Array = [[70, 74, 72], [58, 66, 70], [76, 70, 60]][rnd % 3]
+		_rect(p, -3.4, -8, 6.8, 8, c)
+		for y: float in [-6.4, -3.6, -1.2]:
+			_rect(p, -3.4, y, 6.8, 0.6, _mul(c, 1.35))
+		_rect(p, -3.4, -8, 0.8, 8, _mul(rim, 0.6))
+		_rect(p, 2.6, -8, 0.8, 8, _mul(c, 0.55))
+		if rnd % 2:
+			_poly(p, [[-4.2, -8.8], [3.6, -10.6], [3.9, -9.6], [-4.0, -7.8]], _mul(c, 1.15))
+		else:
+			_ell(p, 3.0, -2.2, 6.4, 2.2, _mul(c, 1.1))                 # Deckel liegt daneben
+			for it: Array in [[-3, -9.4, 3, 1.4, [150, 146, 132]], [0, -9.0, 3, 1.2, [40, 40, 44]],
+					[-1.5, -10.0, 2, 1.0, [120, 100, 70]]]:
+				_rect(p, it[0], it[1], it[2], it[3], it[4])
+	elif kind == "wreck":
+		# ausgeschlachteter 60er-Straßenkreuzer, aufgebockt; Länge ~48, Höhe ~12
+		var paint := _mul([[70, 92, 96], [100, 80, 56], [62, 66, 84], [112, 92, 72], [88, 50, 44]][rnd % 5], 0.55)
+		var s_ := 0.75
+		for x: float in [-15.0, 15.0]:
+			_rect(p, x - 2, -3.2, 4, 3.2, [40, 38, 36])                 # Blöcke statt Räder
+		var body := [[-31.6, -5], [-32.4, -9.2], [-31.2, -12.4], [-27, -10.8], [-14.5, -10.9], [-10.5, -16.4],
+				[7.8, -16.8], [13.2, -11.2], [28.6, -10.4], [31.8, -8.8], [32.2, -5.2], [30, -3.6], [-30, -3.6]]
+		var flip := -1 if rnd % 2 else 1
+		var bp := []
+		for q: Array in body:
+			bp.append([float(q[0]) * s_ * flip, float(q[1]) * s_ - 0.6])
+		_poly(p, bp, paint)
+		var wp := []
+		for q: Array in [[-9.4, -11.2], [-7.4, -15.6], [7.0, -15.9], [11.4, -11.2]]:
+			wp.append([float(q[0]) * s_ * flip, float(q[1]) * s_ - 0.6])
+		_poly(p, wp, [10, 12, 14])
+		_rect(p, -23, -6.6, 46, 0.5, [100, 102, 100])                    # Chromleiste
+		for r: Array in [[-18, -8.4, 3, 1.4], [-6, -9.0, 2, 1.0], [9, -8.2, 4, 1.2], [16, -7.0, 2, 1.6]]:
+			_rect(p, r[0], r[1], r[2], r[3], _mul([156, 84, 40], 0.75))   # Rost
+		var hx := 21.0 * flip
+		_poly(p, [[hx - 6 * flip, -8.6], [hx + 2 * flip, -8.2], [hx + 4 * flip, -14.0]], _mul(paint, 0.85))
+		var gut := [[30, 30, 32], [90, 40, 30], [60, 70, 50]]
+		for k in 4:                                                      # Kabelgedärm
+			_line(p, hx, -8.0, hx + (k - 1.5) * 2.4 * flip, -0.4, gut[k % 3], 0.5)
+		_rect(p, -6, -12.4, 1.0, 1.0, [150, 170, 170])                  # Scherben
 
 
 ## [img, emit, ax, ay]: Anker = Boden-Mitte.
@@ -641,11 +746,12 @@ static func obstacle_image(kind: String, seed_: int, ppu: float, rim: Array) -> 
 	var hit: Variant = _CACHE.get(key)
 	if hit != null:
 		return hit
-	var w := int(30 * kpx) + 6
-	var hh := int(26 * kpx) + 6
+	var sc: float = OB_SCALE.get(kind, 1.0)
+	var w := int(float(_OB_W.get(kind, 30)) * sc * kpx) + 6
+	var hh := int(26 * sc * kpx) + 6
 	var ax := w / 2
 	var ay := hh - 3
-	var res := _bake(w, hh, ax, ay, kpx, func(p: QP, e: QP) -> void:
+	var res := _bake(w, hh, ax, ay, kpx * sc, func(p: QP, e: QP) -> void:
 		_draw_obstacle(p, e, kind, Py.imod(seed_, 5), rim))
 	if res.is_empty():
 		return [null, null, ax, ay]

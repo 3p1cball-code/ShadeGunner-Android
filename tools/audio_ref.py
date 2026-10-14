@@ -120,7 +120,7 @@ def scenario():
             actors.append(dict(alive=r.random() < 0.9, alert=r.random() < 0.05,
                                state=r.choice(("walk", "idle", "flee", "attack", "punch", "leap", "stand"))))
         world = dict(zone_index=zi, unrest=round(unrest, 6), aiming=(i // 90) % 3 == 1,
-                     boss=({"hp": 3} if 3300 <= i < 3500 else None), blackout_t=bl,
+                     boss=({"hp": 3, "alive": True} if 3300 <= i < 3500 else None), blackout_t=bl,
                      run=(dict(suspicion=round(susp, 6)) if mode != "title" else None), actors=actors)
         ev = []
         n_ev = 0 if r.random() < 0.85 else r.randint(1, 4)

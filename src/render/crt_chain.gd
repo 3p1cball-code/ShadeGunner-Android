@@ -133,6 +133,9 @@ func _process(_delta: float) -> void:
 	mb.set_shader_parameter("u_contrast", Config.GRADE_CONTRAST)
 	mb.set_shader_parameter("u_sat", Config.GRADE_SATURATION)
 	mb.set_shader_parameter("u_lift", Config.GRADE_LIFT)
+	mb.set_shader_parameter("PAL", Palette.v3())
+	mb.set_shader_parameter("u_pal_off", 0)
+	mb.set_shader_parameter("u_pal_n", 16)
 	if hud_tex != null:
 		mb.set_shader_parameter("u_hud", hud_tex)
 		mb.set_shader_parameter("u_has_hud", 1)

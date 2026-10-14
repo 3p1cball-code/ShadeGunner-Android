@@ -9,7 +9,7 @@ const COATS = [
 	[[78, 80, 94], "grau"],
 	[[126, 32, 58], "rot"],
 	[[34, 96, 106], "türkis"],
-	[[100, 66, 150], "violett"],
+	[[48, 100, 70], "grün"],
 	[[96, 120, 166], "hellblau"],
 	[[24, 24, 32], "schwarz"],
 	[[196, 150, 52], "gelb"],
@@ -88,6 +88,7 @@ const VEHICLES = {
 	"police": [90.0, 31.0, 215.0],
 	"limo": [126.0, 26.5, 160.0],
 	"bus": [180.0, 56.0, 120.0],
+	"classic": [98.0, 26.0, 150.0],
 }
 const WEAK_TELLS = ["gait", "anachron"]
 const ZONES = [
@@ -161,7 +162,7 @@ const ZONES = [
 	},
 	{
 		"name": "Tyrell",
-		"length": 2300,
+		"length": 4000,
 		"density": 2.6,
 		"sidewalk": 1.4,
 		"groups": 0.32,
@@ -178,16 +179,16 @@ const ZONES = [
 	},
 ]
 const ZONE_PARKED = [
-	["truck", "car", "car"],
-	["car", "car", "taxi", "bike", "car"],
-	["taxi", "car", "car", "bike", "taxi", "bus"],
-	["truck", "truck", "car", "car", "bike"],
+	["truck", "classic", "car", "classic"],
+	["car", "classic", "taxi", "bike", "car"],
+	["taxi", "car", "classic", "bike", "taxi", "bus"],
+	["truck", "truck", "classic", "car", "bike"],
 	["limo", "car", "limo", "police"],
 ]
 const ZONE_TRAFFIC = [
-	["car", "car", "car", "taxi", "bike", "truck"],
-	["car", "car", "car", "taxi", "taxi", "bike", "police", "truck", "bus"],
-	["car", "car", "car", "taxi", "taxi", "car", "bike", "police", "truck", "bus"],
-	["car", "car", "car", "taxi", "car", "bike", "truck", "police", "bus"],
+	["car", "classic", "car", "classic", "taxi", "bike", "truck"],
+	["car", "car", "classic", "taxi", "taxi", "bike", "police", "truck", "bus"],
+	["car", "car", "car", "taxi", "taxi", "classic", "bike", "police", "truck", "bus"],
+	["car", "car", "classic", "taxi", "car", "bike", "truck", "police", "bus"],
 	["car", "car", "car", "taxi", "limo", "car", "police", "truck"],
 ]

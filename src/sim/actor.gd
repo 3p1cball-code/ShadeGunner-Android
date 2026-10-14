@@ -51,6 +51,7 @@ var attack_cd: float = 0.0
 
 var boss: bool = false                 # Endboss (ROY)
 var boss_invuln: bool = false
+var peaceful: bool = false             # stirbt von selbst (ROY): keine Kreide, keine Lache
 
 var z: float = 0.0                     # Sprunghöhe (Welt-Einheiten)
 var vz: float = 0.0

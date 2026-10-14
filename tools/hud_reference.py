@@ -221,12 +221,10 @@ def fx_ref():
             f.impact(240.0, 0.6, -20.0, (255, 220, 160), n=6, blood=False)
         f.update_steam(dt)
         f.update_combat(dt)
-        bolt = f.update_weather(dt * 9, 0.8)
         sh = f.shake()
-        log.append([bolt, list(sh), f.trauma, f.lightning])
+        log.append([list(sh), f.trauma])
     data = dict(rain=f.rain, splashes=f.splashes, steam=f.steam, sparks=[dict(s, c=list(s["c"])) for s in f.sparks],
-                flashes=f.flashes, tracers=f.tracers, bolt=f.bolt, log=log, next_bolt=f._next_bolt,
-                rnd=f.rng.random())
+                flashes=f.flashes, tracers=f.tracers, log=log, rnd=f.rng.random())
     img = QImage(640, 360, QImage.Format.Format_RGB32)
     img.fill(QColor(18, 22, 38))
     p = QPainter(img)

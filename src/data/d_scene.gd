@@ -12,43 +12,45 @@ const ADS = [
 	"TRINK KALTEN KAFFEE",
 	"PAN AM",
 ]
-const AMBER = [255, 138, 44]
-const ASH = [162, 168, 180]
-const BLUE = [74, 92, 138]
+const AMBER = [255, 148, 48]
+const ASH = [150, 162, 168]
+const BLUE = [52, 86, 104]
 const C = [
-	[6, 8, 14],
-	[18, 22, 38],
-	[34, 40, 66],
-	[52, 60, 96],
-	[74, 92, 138],
-	[104, 132, 178],
-	[138, 32, 56],
+	[5, 8, 10],
+	[12, 22, 28],
+	[22, 38, 48],
+	[34, 58, 70],
+	[52, 86, 104],
+	[92, 128, 144],
+	[226, 38, 46],
 	[156, 84, 40],
-	[162, 168, 180],
-	[214, 220, 226],
+	[46, 104, 250],
+	[148, 172, 170],
 	[255, 255, 255],
-	[34, 96, 104],
-	[64, 210, 220],
+	[30, 104, 104],
+	[70, 220, 214],
 	[224, 72, 150],
-	[255, 138, 44],
-	[122, 74, 168],
+	[255, 148, 48],
+	[80, 226, 110],
 ]
 const CLOUD_F = 0.035
-const CRIMSON = [138, 32, 56]
-const CYAN = [64, 210, 220]
+const CRIMSON = [150, 28, 40]
+const CYAN = [70, 220, 214]
 # übersprungen: FX (type)
+const GREEN = [80, 226, 110]
 const H = 360
-const INDIGO = [52, 60, 96]
+const INDIGO = [34, 58, 70]
 const MAGENTA = [224, 72, 150]
 const MID_F = 0.3
-const NAVY = [34, 40, 66]
-const NIGHT = [18, 22, 38]
-const PALE = [214, 220, 226]
-const SLATE = [112, 118, 132]
+const NAVY = [22, 38, 48]
+const NBLUE = [46, 104, 250]
+const NIGHT = [12, 22, 28]
+const PALE = [148, 172, 170]
+const RED = [226, 38, 46]
+const SLATE = [104, 118, 126]
 const SODIUM = [156, 84, 40]
-const STEEL = [104, 132, 178]
-const TEAL = [34, 96, 104]
-const VIOLET = [122, 74, 168]
-const VOID = [6, 8, 14]
+const STEEL = [92, 128, 144]
+const TEAL = [30, 104, 104]
+const VOID = [5, 8, 10]
 const W = 640
 const WHITE = [255, 255, 255]

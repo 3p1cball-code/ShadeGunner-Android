@@ -11,4 +11,14 @@ const DEFAULTS = {
 	"renderer": "auto",
 	"difficulty": "normal",
 	"lang": "de",
+	"quality": "hoch",
+	"reflections": true,
+	"rain": "viel",
+	"fog": true,
+	"fx": true,
+}
+const QUALITY = {
+	"hoch": {"reflections": true, "rain": "viel", "fog": true, "fx": true},
+	"mittel": {"reflections": false, "rain": "viel", "fog": true, "fx": true},
+	"niedrig": {"reflections": false, "rain": "aus", "fog": false, "fx": false},
 }
