@@ -134,9 +134,9 @@ humans occasionally show a false reflex too.
 | Touch | Gamepad | Keyboard | Action |
 |---|---|---|---|
 | stick (left) | D-pad / left stick | `A/D`, `W/S`, arrows | walk, depth (near/far) |
-| tap a person | `L1`/`R1` | `Q` / `Tab` | pick / cycle target |
+| tap a person | `L1` | `Q` / `Tab` | cycle target |
 | SCAN | `X` | `R` | scan selected target |
-| AIM (hold, release) | `R2` (hold, release) | `E` (hold, release) | aim, fire |
+| AIM (hold, release) | `R1` or `R2` (hold, release) | `E` (hold, release) | aim, fire |
 | CANCEL | `B` | `C` | lower weapon |
 | SHOUT (tap / hold) | `Y` | `V` | address target / shout "LAPD! Everyone down!" |
 | JUMP | `A` | `Space` | jump |
@@ -173,6 +173,10 @@ the device. Settings let you trade effects for frames:
 - **Port-specific speed-ups:** wet-street reflections are drawn by a shader instead of
   baking a blurred image per sprite frame, radial gradients use a cached 2D texture,
   the perspective ground and reflection bands are single draw calls.
+- Gamepad on a handheld: digital shoulder buttons report a button, not an
+  analog trigger axis, and Godot has no `JOY_BUTTON_L2/R2` constants - that is why
+  **aim/fire sits on `R1`** (the R2 axis works as well). `--joydebug` prints every
+  gamepad button/axis index if a button ever seems unresponsive.
 - Test cheat (keyboard): type `giveall` anywhere (immortal, exit always open);
   `giveall1`–`giveall5` jumps straight into sector 1–5.
 

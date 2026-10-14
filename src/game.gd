@@ -55,6 +55,7 @@ var _set_over := ""
 var _start_zone := -1         # Werkzeuge: --zone=N startet direkt in Sektor N+1
 var _start_x := -1.0          # Werkzeuge: --x=X setzt den Spieler auf x
 var _seed_over := -1          # Werkzeuge: --seed=N fester Seed des Einsatzes
+var _joydebug := false        # Werkzeuge: --joydebug zeigt Gamepad-Knopf/Achsen-Indizes
 var _flick := false
 var _flick_imgs: Array = []
 var _flick_boxes: Array = []
@@ -157,8 +158,12 @@ func _setup_input() -> void:
 		"depth_near": [["k", KEY_S], ["k", KEY_DOWN], ["j", JOY_BUTTON_DPAD_DOWN], ["a", JOY_AXIS_LEFT_Y, 1.0]],
 		"up": [["k", KEY_W], ["k", KEY_UP], ["j", JOY_BUTTON_DPAD_UP], ["a", JOY_AXIS_LEFT_Y, -1.0]],
 		"down": [["k", KEY_S], ["k", KEY_DOWN], ["j", JOY_BUTTON_DPAD_DOWN], ["a", JOY_AXIS_LEFT_Y, 1.0]],
+		# Zielen/Schießen liegt bewusst auf R1 (Schultertaste) UND auf der R2-Achse:
+		# analoge Trigger melden eine ACHSE, aber nicht jedes Gerät liefert sie (der
+		# Retroid Pocket Classic hat kurze digitale Schultertasten). Godot kennt keine
+		# JOY_BUTTON_L2/R2-Konstanten, ein digitaler Trigger käme also nirgends an.
 		"sprint": [["k", KEY_SHIFT], ["a", JOY_AXIS_TRIGGER_LEFT, 1.0]],
-		"aim": [["k", KEY_E], ["k", KEY_CTRL], ["a", JOY_AXIS_TRIGGER_RIGHT, 1.0]],
+		"aim": [["k", KEY_E], ["k", KEY_CTRL], ["a", JOY_AXIS_TRIGGER_RIGHT, 1.0], ["j", JOY_BUTTON_RIGHT_SHOULDER]],
 		"scan": [["k", KEY_R], ["j", JOY_BUTTON_X]],
 		"jump": [["k", KEY_SPACE], ["j", JOY_BUTTON_A]],
 		"cancel": [["k", KEY_C], ["k", KEY_BACKSPACE], ["j", JOY_BUTTON_B]],
@@ -166,8 +171,8 @@ func _setup_input() -> void:
 		"confirm": [["k", KEY_ENTER], ["k", KEY_KP_ENTER], ["j", JOY_BUTTON_A]],
 		"pause": [["k", KEY_P], ["k", KEY_ESCAPE], ["j", JOY_BUTTON_START]],
 		"help": [["k", KEY_H], ["k", KEY_F1], ["j", JOY_BUTTON_BACK]],
-		"cycle_next": [["k", KEY_TAB], ["k", KEY_Q], ["j", JOY_BUTTON_RIGHT_SHOULDER]],
-		"cycle_prev": [["j", JOY_BUTTON_LEFT_SHOULDER]],
+		"cycle_next": [["k", KEY_TAB], ["k", KEY_Q], ["j", JOY_BUTTON_LEFT_SHOULDER]],
+		"cycle_prev": [],
 		"mute": [["k", KEY_M]],
 		"fullscreen": [["k", KEY_F]],
 		# Menue-Aktionen (Touch-Buttons, teils Tastatur)
@@ -227,6 +232,8 @@ func _parse_args() -> void:
 			_start_x = float(a.substr(4))
 		elif a.begins_with("--seed="):
 			_seed_over = int(a.substr(7))
+		elif a == "--joydebug":
+			_joydebug = true
 		elif a.begins_with("--settings-sel="):
 			settings_sel = int(a.substr(15))
 		elif a == "--flickertest":
@@ -614,6 +621,14 @@ func _hud_ui() -> Dictionary:
 
 # ---------------------------------------------------------------- Eingabe
 func _input(e: InputEvent) -> void:
+	if _joydebug and (e is InputEventJoypadButton or e is InputEventJoypadMotion):
+		if e is InputEventJoypadButton:
+			var jb := e as InputEventJoypadButton
+			print("JOY button ", jb.button_index, " ", "pressed" if jb.pressed else "released")
+		else:
+			var jm := e as InputEventJoypadMotion
+			if absf(jm.axis_value) > 0.2:
+				print("JOY axis ", jm.axis, " = ", jm.axis_value)
 	if e is InputEventMouseButton and (e as InputEventMouseButton).pressed and touch != null and touch.is_over_controls((e as InputEventMouseButton).position):
 		return
 	if e is InputEventMouseMotion:

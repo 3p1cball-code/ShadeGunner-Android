@@ -68,6 +68,26 @@ func _retroid_release() -> void:
 	Input.parse_input_event(m)
 
 
+## Ist eine Gamepad-TASTE (nicht Achse) auf die Aktion gelegt? Trifft zu, wenn die
+## Zuordnung kein Tastatur-/Achsen-Ereignis ist (Tasten und Achsen heißen beide "InputEvent").
+func _has_joy(action: String, button: int) -> bool:
+	if not InputMap.has_action(action):
+		return false
+	for e: InputEvent in InputMap.action_get_events(action):
+		if e is InputEventJoypadButton and int((e as InputEventJoypadButton).button_index) == button:
+			return true
+	return false
+
+
+func _has_axis(action: String, axis: int) -> bool:
+	if not InputMap.has_action(action):
+		return false
+	for e: InputEvent in InputMap.action_get_events(action):
+		if e is InputEventJoypadMotion and int((e as InputEventJoypadMotion).axis) == axis:
+			return true
+	return false
+
+
 func _chk(name: String, ok: bool, info: String) -> void:
 	print(("  ok   " if ok else "  FAIL ") + name + "  " + info)
 	if not ok:
@@ -82,6 +102,10 @@ func _process(_d: float) -> void:
 	match step:
 		1:
 			_chk("Start im Titel", g.mode == "title", g.mode)
+			_chk("Schiessen auf der Schultertaste R1 (Retroid) statt nur Trigger-Achse",
+				_has_joy("aim", JOY_BUTTON_RIGHT_SHOULDER), str(_has_joy("aim", JOY_BUTTON_RIGHT_SHOULDER)))
+			_chk("Radfahren/Zielen auch auf der Trigger-Achse R2", _has_axis("aim", JOY_AXIS_TRIGGER_RIGHT),
+				str(_has_axis("aim", JOY_AXIS_TRIGGER_RIGHT)))
 			_btn(JOY_BUTTON_DPAD_DOWN)
 		2:
 			_chk("D-Pad runter oeffnet Einstellungen", g.mode == "settings", g.mode)

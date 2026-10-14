@@ -130,9 +130,9 @@ Wahrheit: Auch Menschen zeigen gelegentlich einen falschen Reflex.
 | Touch | Gamepad | Tastatur | Aktion |
 |---|---|---|---|
 | Stick (links) | Steuerkreuz / linker Stick | `A/D`, `W/S`, Pfeile | gehen, Tiefe (nah/fern) |
-| Person antippen | `L1`/`R1` | `Q` / `Tab` | Ziel wählen / wechseln |
+| Person antippen | `L1` | `Q` / `Tab` | Ziel wechseln |
 | SCAN | `X` | `R` | gewähltes Ziel scannen |
-| ZIELEN (halten, loslassen) | `R2` (halten, loslassen) | `E` (halten, loslassen) | zielen, schießen |
+| ZIELEN (halten, loslassen) | `R1` oder `R2` (halten, loslassen) | `E` (halten, loslassen) | zielen, schießen |
 | ABBRECHEN | `B` | `C` | Waffe senken |
 | RUF (tippen / halten) | `Y` | `V` | Ziel ansprechen / „LAPD! Alle runter!“ rufen |
 | SPRUNG | `A` | `Leertaste` | springen |
@@ -173,6 +173,10 @@ Gerät ab. In den Einstellungen tauscht man Effekte gegen Bilder pro Sekunde:
   Shader, statt je Sprite-Frame ein weichgezeichnetes Bild zu backen; radiale Verläufe
   nutzen eine gecachte 2D-Textur; Perspektivboden und Spiegelungsstreifen sind je ein
   Zeichenaufruf.
+- Gamepad am Handheld: digitale Schultertasten melden einen Knopf, keine Trigger-Achse,
+  und Godot kennt keine `JOY_BUTTON_L2/R2`-Konstanten - deshalb liegt **Zielen/Schießen
+  auf `R1`** (die R2-Achse geht zusätzlich). `--joydebug` zeigt jeden Knopf-/Achsen-Index,
+  falls eine Taste nicht reagiert.
 - Test-Cheat (Tastatur): irgendwo `giveall` tippen (unsterblich, Ausgang immer offen);
   `giveall1`–`giveall5` springt direkt in Sektor 1–5.
 
