@@ -14,7 +14,7 @@ a faithful re-implementation in **Godot 4 / GDScript**, not an emulator wrapper.
 Same simulation, same city, same look – the procedural scene composed into 640×360,
 Bayer-dithered against a 16-color palette and pushed through the CRT chain
 (curvature, scanlines, shadow mask, bloom, phosphor persistence). Playable with
-**touch, gamepad (e.g. Retroid Pocket) or keyboard**, on any screen shape from 4:3
+**touch, gamepad (e.g. Retroid Pocket) or keyboard**, on any screen shape from 10:9 (Retroid Pocket Classic)
 to ~22:9. UI and in-game text in **German and English**.
 
 **Download:** the signed APK (arm64, Android 7+) is on the
@@ -155,7 +155,7 @@ the device. Settings let you trade effects for frames:
   **reflections**, **rain** (heavy/light/off), **fog** and **FX** in one go; each can
   then be toggled on its own. On a handheld start with **LOW**.
 - **Aspect ratio** AUTO: the internal width adapts to the screen (height 360, width
-  480–960) – no letterbox and no cropping, same scale on every device.
+  400–960) – no letterbox and no cropping, same scale on every device.
 - **Display** CRT or **TEXT** (the scene as ASCII characters in the palette colors,
   still through the CRT chain), scanlines, music/effects volume, difficulty, language.
 

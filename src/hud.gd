@@ -229,6 +229,17 @@ func _t(q: QP, x: float, y: float, s: String, col: Array, scale: int = 2,
 # ------------------------------------------------------------------ variable Breite
 ## Schmaler als 16:9 (HW < 1280)? Nur dann greift das umgestellte Layout - bei 16:9
 ## und breiter bleibt alles exakt wie im Original (HUD-Paritaet).
+static func _pm() -> int:
+	## Rand der oberen Panels: 34 wie im Original; erst wenn beide 410er-Panels nicht mehr
+	## nebeneinander passen (HW < 904, z. B. Retroid Pocket Classic 10:9 -> HW 828), 16.
+	return 34 if HW >= 34 * 2 + 410 * 2 + 16 else 16
+
+
+static func _pw() -> int:
+	## Breite der oberen Panels (410 wie im Original, schmal so breit wie Platz ist).
+	return mini(410, Py.ifloordiv(HW - 2 * _pm() - 12, 2))
+
+
 static func narrow() -> bool:
 	return HW < BASE_HW
 
@@ -559,7 +570,7 @@ func _boss(q: QP, world: Variant) -> void:
 	var h2 := 30
 	var x2 := Py.ifloordiv(HW - w2, 2)
 	var y2 := 64
-	if x2 < 34 + 410 + 8:          # schmal: oben ist kein Platz zwischen den Panels
+	if x2 < _pm() + _pw() + 8:          # schmal: oben ist kein Platz zwischen den Panels
 		y2 = 24 + 136 + 64
 	q.fill_rect(x2, y2, w2, h2, QP.c(6, 8, 14, 225))
 	q.set_pen(QP.rgb(CRIMSON), 2.0)
@@ -604,9 +615,10 @@ func _panels(q: QP, world: Variant, _ui: Dictionary) -> void:
 	var reps: int = stats["reps"]
 	var quota: int = world.quota
 	# oben links
-	var ox := 34
+	var ox := _pm()
 	var oy := 24
-	_box(q, ox, oy, 410, 88)
+	var pw_ := _pw()
+	_box(q, ox, oy, pw_, 88)
 	_t(q, ox + 14, oy + 12, I18n.t("SEKTOR {}/5", [int(world.zone_index) + 1]), ASH)
 	_t(q, ox + 146, oy + 12, _upper(I18n.t(String(z["name"]))), WHITE)
 	_t(q, ox + 14, oy + 34, "AUFTRAG", ASH)
@@ -617,7 +629,7 @@ func _panels(q: QP, world: Variant, _ui: Dictionary) -> void:
 		Pixfont.draw(q, x, oy + 34, "▮" if done else "▯", col, 2, VOID)
 		x += 16
 	_t(q, x + 8, oy + 34, "%d/%d" % [reps, quota], PALE)
-	_t(q, ox + 300, oy + 34, I18n.t("REST {}", [world.reps_remaining()]), SLATE)
+	_t(q, ox + pw_ - 110, oy + 34, I18n.t("REST {}", [world.reps_remaining()]), SLATE)
 	_t(q, ox + 14, oy + 58, "PUNKTE", ASH)
 	_t(q, ox + 116, oy + 58, Py.fmt("{:06d}", [maxi(0, int(run.score))]), WHITE)
 	if int(world.combo) > 1:
@@ -632,7 +644,7 @@ func _panels(q: QP, world: Variant, _ui: Dictionary) -> void:
 		var status := "KASSIERT ✓" if done else ("ENTKOMMEN ✗" if b.escaped else ("" if not gone else "✗"))
 		var bw := maxi(Pixfont.text_width(line2, 2), Pixfont.text_width(line1 + "  " + status, 2)) + 28
 		var lines2: Array = [line2]
-		var maxbw := HW - 34 - 410 - 16 - ox      # bis vor das rechte Panel
+		var maxbw := HW - _pm() - pw_ - 16 - ox      # bis vor das rechte Panel
 		if bw > maxbw:
 			# Beschreibung umbrechen (Merkmale bleiben ganz, solange sie passen)
 			lines2 = []
@@ -659,8 +671,8 @@ func _panels(q: QP, world: Variant, _ui: Dictionary) -> void:
 		for i in lines2.size():
 			_t(q, ox + 14, oy + 128 + 22 * i, lines2[i], PALE if not done else SLATE)
 	# oben rechts
-	var rx := HW - 34 - 410
-	_box(q, rx, oy, 410, 136)
+	var rx := HW - _pm() - pw_
+	_box(q, rx, oy, pw_, 136)
 	_t(q, rx + 14, oy + 12, "INTEGRITÄT", ASH)
 	var hx := rx + 160
 	for i in int(run.max_hp):
@@ -681,25 +693,26 @@ func _panels(q: QP, world: Variant, _ui: Dictionary) -> void:
 	_t(q, rx + 14, oy + 58, "VERDACHT", ASH)
 	var sus: float = world.suspicion
 	var scol: Array = AMBER if sus < 0.66 else (RED if int(t_ * 4) % 2 == 0 else CRIMSON)
-	_bar(q, rx + 160, oy + 60, 230, 10, sus, scol)
+	var bw_ := pw_ - 180                     # 230 bei voller Breite
+	_bar(q, rx + 160, oy + 60, bw_, 10, sus, scol)
 	# Ruf (V): bereit / lädt
 	var cd: float = float(_ga(world, "shout_cd", 0.0))
 	var full_cd: float = Config.SHOUT_CD * float((world.run.mods as Dictionary).get("shout_cd", 1.0))
 	_t(q, rx + 14, oy + 82, "RUF  V", ASH)
 	if cd <= 0:
 		_t(q, rx + 160, oy + 82, "BEREIT", CYAN)
-		_t(q, rx + 390, oy + 82, "HALTEN", SLATE, 2, "right")
+		_t(q, rx + pw_ - 20, oy + 82, "HALTEN", SLATE, 2, "right")
 	else:
-		_bar(q, rx + 160, oy + 84, 230, 10, 1.0 - cd / maxf(0.1, full_cd), TEAL)
+		_bar(q, rx + 160, oy + 84, bw_, 10, 1.0 - cd / maxf(0.1, full_cd), TEAL)
 	var un: float = float(_ga(world, "unrest", 0.0))
 	_t(q, rx + 14, oy + 106, "UNRUHE", ASH)
-	_bar(q, rx + 160, oy + 108, 230, 10, un, AMBER if un < 0.6 else RED)
+	_bar(q, rx + 160, oy + 108, bw_, 10, un, AMBER if un < 0.6 else RED)
 	# Fortschritt (Mitte oben)
 	var px0 := Py.ifloordiv(HW, 2) - 160
 	var pw := 320
 	var py := oy + 22
-	if px0 < ox + 410 + 16:        # schmal: zwischen den Panels ist kein Platz -> unter das rechte
-		px0 = rx + Py.ifloordiv(410 - pw, 2)
+	if px0 < ox + pw_ + 16:        # schmal: zwischen den Panels ist kein Platz -> unter das rechte
+		px0 = rx + Py.ifloordiv(pw_ - pw, 2)
 		py = oy + 136 + 26
 	q.fill_rect(px0, py, pw, 2, QP.rgb(SLATE))
 	var f := maxf(0.0, minf(1.0, float(world.player.x) / float(world.length)))
@@ -991,7 +1004,12 @@ static func _settings_geom(sel: int) -> Dictionary:
 func _pause(q: QP) -> void:
 	_dim(q, 150)
 	_t(q, Py.ifloordiv(HW, 2), 230, "PAUSE", WHITE, 6, "center")
-	_t(q, Py.ifloordiv(HW, 2), 330, "P / ESC  WEITER      S  EINSTELLUNGEN      H  HILFE      Q  ZUM TITEL", ASH, 2, "center")
+	var line := "P / ESC  WEITER      S  EINSTELLUNGEN      H  HILFE      Q  ZUM TITEL"
+	if Pixfont.text_width(I18n.t(line), 2) > HW - 40:      # schmal (10:9): zwei Zeilen
+		_t(q, Py.ifloordiv(HW, 2), 330, "P / ESC  WEITER      S  EINSTELLUNGEN", ASH, 2, "center")
+		_t(q, Py.ifloordiv(HW, 2), 356, "H  HILFE      Q  ZUM TITEL", ASH, 2, "center")
+	else:
+		_t(q, Py.ifloordiv(HW, 2), 330, line, ASH, 2, "center")
 
 
 func _clear(q: QP, world: Variant, ui: Dictionary) -> void:

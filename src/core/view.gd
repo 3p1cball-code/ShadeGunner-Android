@@ -1,6 +1,6 @@
 class_name View
 ## Variable interne Bildbreite: die Höhe bleibt 360, die Breite folgt dem
-## Seitenverhältnis des Bildschirms (480 = 4:3 … 960 = 24:9). Der Belt-Scroller
+## Seitenverhältnis des Bildschirms (400 = 10:9, 480 = 4:3 … 960 = 24:9). Der Belt-Scroller
 ## zeigt dann links/rechts mehr bzw. weniger Straße - ohne Balken, ohne Beschnitt.
 ##
 ## Der MASSSTAB bleibt dabei fest: Persp.PPU_NEAR = Config.RENDER_W / VIEW_SPAN_NEAR
@@ -12,7 +12,7 @@ class_name View
 ## Ohne setup() gilt die Basisbreite 640 (Tests, Parität).
 
 const BASE_W := Config.RENDER_W
-const MIN_W := 480
+const MIN_W := 400          # 10:9 - Retroid Pocket Classic (1240x1080 = 31:27) braucht 414
 const MAX_W := 960
 
 static var W := BASE_W
@@ -20,7 +20,7 @@ static var H := Config.RENDER_H
 static var aspect_used := ""     # Einstellung, mit der setup() lief ("" = nie)
 
 
-## "auto": Breite aus dem Fenster-Seitenverhältnis (gerade, 480..960);
+## "auto": Breite aus dem Fenster-Seitenverhältnis (gerade, 400..960);
 ## alles andere ("16:9"/"letterbox"): Basisbreite 640.
 static func setup(aspect_setting: String, win_size: Vector2) -> void:
 	aspect_used = aspect_setting

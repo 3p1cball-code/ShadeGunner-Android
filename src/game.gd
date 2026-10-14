@@ -399,6 +399,7 @@ func _process(delta: float) -> void:
 		touch.set_mode(mode)
 		touch.set_help(help)
 	audio.update(dt, world, mode)
+	_nav_repeat(dt)
 	if textmode != null:
 		textmode.sync_palette()
 
@@ -636,12 +637,111 @@ func _input(e: InputEvent) -> void:
 			pass
 		elif st.pressed:
 			_mouse_press(st.position, MOUSE_BUTTON_LEFT)
+	elif e is InputEventJoypadMotion:
+		if not _nav_motion_edge(e as InputEventJoypadMotion):
+			return
+		if not _nav_drop(e):
+			_on_action(e)
 	elif e.is_pressed():
 		if e is InputEventKey and not (e as InputEventKey).echo:
 			var uc := (e as InputEventKey).unicode
 			if uc >= 32 and _cheat_input(String.chr(uc)):
 				return
+		if _nav_drop(e):
+			return
 		_on_action(e)
+
+
+# ---------------------------------------------------------------- Menü-Navigation entprellen
+## Ein Druck aufs Steuerkreuz kommt auf Android-Handhelds (Retroid) mehrfach an: als
+## Tasten-Ereignis (KEYCODE_DPAD_*), als Gamepad-Taste und teils als Achse - dazu
+## schnelle Tasten-Wiederholungen. Im Menü sprang die Auswahl deshalb um mehrere Zeilen.
+## Darum: Wiederholungen (echo) verwerfen, Achsen nur an der Flanke werten, dieselbe
+## Richtung aus mehreren Quellen innerhalb von NAV_DEDUP_MS nur einmal zählen und beim
+## Halten selbst wiederholen (NAV_REPEAT_DELAY, dann NAV_REPEAT_RATE).
+const NAV_DEDUP_MS := 110
+const NAV_REPEAT_DELAY := 0.45
+const NAV_REPEAT_RATE := 0.16
+const NAV_MODES := ["title", "pause", "settings", "clear", "over", "victory", "intro"]
+var _nav_last := {}          # Richtung -> Zeitpunkt (ms) der letzten gewerteten Eingabe
+var _axis_sign := {}         # Achse -> -1/0/1 (Flankenerkennung)
+var _nav_hold_dir := ""
+var _nav_hold_t := 0.0
+var _nav_hold_next := 0.0
+
+
+func _nav_dir(e: InputEvent) -> String:
+	if _hit(e, NAV_UP, true):
+		return "up"
+	if _hit(e, NAV_DOWN, true):
+		return "down"
+	if _hit(e, NAV_LEFT, true):
+		return "left"
+	if _hit(e, NAV_RIGHT, true):
+		return "right"
+	if _hit(e, NAV_OK, true) or _hit(e, ["jump"], true):
+		return "ok"
+	if _hit(e, NAV_BACK, true):
+		return "back"
+	return ""
+
+
+## Achse: nur der Übergang in eine Richtung zählt (nicht jedes Bewegungsereignis).
+func _nav_motion_edge(m: InputEventJoypadMotion) -> bool:
+	var sgn := 1 if m.axis_value > 0.5 else (-1 if m.axis_value < -0.5 else 0)
+	var prev: int = _axis_sign.get(m.axis, 0)
+	_axis_sign[m.axis] = sgn
+	return sgn != 0 and sgn != prev
+
+
+## true = Ereignis verwerfen (nur in Menüs; im Spiel wird die Bewegung abgefragt).
+## Zeitstempel werden immer geführt (auch im Spiel): sonst schließt das Duplikat
+## eines START-Drucks die gerade geöffnete Pause gleich wieder.
+func _nav_drop(e: InputEvent) -> bool:
+	var dir := _nav_dir(e)
+	if dir == "":
+		return false
+	var menu := help or mode in NAV_MODES
+	if e is InputEventKey and (e as InputEventKey).echo:
+		return menu                                   # im Menü wiederholen wir selbst
+	var now := Time.get_ticks_msec()
+	var recent := now - int(_nav_last.get(dir, -100000)) < NAV_DEDUP_MS
+	if not recent:
+		_nav_last[dir] = now
+	return menu and recent
+
+
+## Halten im Menü: eigene, ruhige Wiederholung (nur Tasten/Gamepad - Touch wiederholt selbst).
+func _nav_repeat(dt: float) -> void:
+	if not (mode in ["settings", "clear"]) or help:
+		_nav_hold_dir = ""
+		return
+	if touch != null and not touch._hold.is_empty():
+		_nav_hold_dir = ""
+		return
+	var dir := ""
+	for pair: Array in [["up", NAV_UP], ["down", NAV_DOWN], ["left", NAV_LEFT], ["right", NAV_RIGHT]]:
+		for a: String in pair[1]:
+			if InputMap.has_action(a) and Input.is_action_pressed(a):
+				dir = pair[0]
+		if dir != "":
+			break
+	if dir != _nav_hold_dir:
+		_nav_hold_dir = dir
+		_nav_hold_t = 0.0
+		_nav_hold_next = NAV_REPEAT_DELAY
+		return
+	if dir == "":
+		return
+	_nav_hold_t += dt
+	if _nav_hold_t < _nav_hold_next:
+		return
+	_nav_hold_next += NAV_REPEAT_RATE
+	var ev := InputEventAction.new()
+	ev.action = {"up": "up", "down": "down", "left": "move_left", "right": "move_right"}[dir]
+	ev.pressed = true
+	_nav_last[dir] = Time.get_ticks_msec()
+	_on_action(ev)
 
 
 

@@ -39,7 +39,7 @@ static var dbg_ok_v := 0
 ## Umbenennungen gegenüber Python: self.t -> t_ (Parameter t überall),
 ## lokale seed -> seed_, lokale img -> im, rng-Parameter -> rng_.
 
-## Bildbreite zur Laufzeit (View.W: 640 ohne View.setup, sonst 480..960); Höhe fest.
+## Bildbreite zur Laufzeit (View.W: 640 ohne View.setup, sonst 400..960); Höhe fest.
 ## Alle Verwendungen meinen die BILDSCHIRMBREITE (Mitte, Ränder, Kulling, Breitenschleifen,
 ## Viewport-/Kachelgrößen); der Maßstab hängt an Persp.PPU_NEAR (Basisbreite 640).
 static var W: int:

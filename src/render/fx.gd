@@ -8,7 +8,7 @@ extends RefCounted
 ## Partikel-Texturen (_soft) werden über FX.baker gebacken (fehlt er, z. B. in
 ## Headless-Tests, bleiben die Texturen leer, die Simulation läuft gleich).
 
-## Bildbreite zur Laufzeit (View.W: 640 ohne View.setup, sonst 480..960); Höhe fest.
+## Bildbreite zur Laufzeit (View.W: 640 ohne View.setup, sonst 400..960); Höhe fest.
 ## Alle Verwendungen meinen die BILDSCHIRMBREITE (Mitte, Ränder, Kulling, Breitenschleifen,
 ## Viewport-/Kachelgrößen); der Maßstab hängt an Persp.PPU_NEAR (Basisbreite 640).
 static var W: int:

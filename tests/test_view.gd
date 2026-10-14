@@ -17,7 +17,7 @@ func _init() -> void:
 	var cases := [[Vector2(1280, 720), 640], [Vector2(1920, 1080), 640], [Vector2(1280, 592), 778],
 		[Vector2(1280, 548), 840], [Vector2(1280, 520), 886], [Vector2(2520, 1080), 840],
 		[Vector2(960, 720), 480], [Vector2(800, 600), 480], [Vector2(1280, 800), 576],
-		[Vector2(1000, 1000), 480], [Vector2(3840, 1080), 960], [Vector2(2400, 1080), 800]]
+		[Vector2(1000, 1000), 400], [Vector2(1240, 1080), 414], [Vector2(3840, 1080), 960], [Vector2(2400, 1080), 800]]
 	for c: Array in cases:
 		var win: Vector2 = c[0]
 		View.setup("auto", win)
@@ -45,7 +45,7 @@ func _init() -> void:
 
 	# --- HUD-Trefferflächen bei mehreren Breiten
 	var hud := HUD.new()
-	for w: int in [480, 640, 886, 960]:
+	for w: int in [400, 414, 480, 640, 886, 960]:
 		View.W = w
 		var n := HUD.SETTING_ROWS.size()
 		for sel in n:
